@@ -10,6 +10,8 @@
 static atomic_bool ending=false,core_stop=true,core_finished=true;
 static hd_shared_map *shared;
 static uint64_t frame_serial;
+static unsigned source_scan=1;
+static void scan(void *ctx,unsigned value) { (void)ctx;source_scan=value; }
 static void terminate_service(int number) { (void)number;atomic_store(&ending,true); }
 static void status(void *ctx,hd_status value,const char *detail) { (void)ctx;(void)detail;if(value==HD_LIVE)return;atomic_store_explicit(&shared->status,value,memory_order_release); }
 static void video(void *ctx,const uint8_t *data,const hd_mode *mode,uint64_t timestamp) {
@@ -25,7 +27,7 @@ static void video(void *ctx,const uint8_t *data,const hd_mode *mode,uint64_t tim
   if(!used) { index=candidate;break; }
  }
  if(index==HD_NO_FRAME){atomic_fetch_add(&shared->dropped_video,1);return;}
- hd_shared_frame *frame=&shared->frames[index];frame->mode=*mode;frame->timestamp=timestamp;frame->bytes=(uint32_t)bytes;memcpy(frame->data,data,bytes);
+ hd_shared_frame *frame=&shared->frames[index];frame->source_scan=source_scan;frame->mode=*mode;frame->timestamp=timestamp;frame->bytes=(uint32_t)bytes;memcpy(frame->data,data,bytes);
  atomic_store_explicit(&shared->video_token,(++frame_serial)*4+index,memory_order_seq_cst);
  atomic_store(&shared->status,HD_LIVE);
 }
@@ -40,7 +42,7 @@ static void message(void *ctx,const char *text) {
  (void)ctx;if(!strncmp(text,"Frames ",7))return;fprintf(stderr,"[HD60 S service] %s\n",text);
 }
 static void *capture(void *unused) {
- (void)unused;pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE,0);hd_callbacks cb={.video=video,.audio=audio,.message=message,.status=status};
+ (void)unused;pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE,0);hd_callbacks cb={.video=video,.audio=audio,.message=message,.status=status,.scan=scan};
  while(!atomic_load(&core_stop)) {
   int product=hd_device_product();
   if(!product)status(NULL,HD_DISCONNECTED,"");
@@ -86,7 +88,7 @@ int main(int argc,char **argv) {
    if(clients && !running) { atomic_store(&core_stop,false);atomic_store(&core_finished,false);status(NULL,HD_INITIALIZING,"");if(!pthread_create(&thread,NULL,capture,NULL))running=true;else status(NULL,HD_ERROR,""); }
    if(!clients && running)atomic_store(&core_stop,true);
   } else if(clients) {
-   if(now-last_frame>=33333333ULL) { hd_mode m={.width=320,.height=240,.rate=30,.audio_rate=48000};video(NULL,fake,&m,now);last_frame=now; }
+   if(now-last_frame>=33333333ULL) { hd_mode m={.width=320,.height=240,.rate=30,.audio_rate=48000};source_scan=1+(frame_serial%2);video(NULL,fake,&m,now);last_frame=now; }
    if(now-last_audio>=10000000ULL) {int16_t pcm[960];for(unsigned i=0;i<480;i++){int16_t v=(int16_t)(sin((sample+i)*2*3.141592653589793*440/48000)*2000);pcm[2*i]=pcm[2*i+1]=v;}audio(NULL,(uint8_t *)pcm,sizeof pcm,48000,epoch+sample*1000000000ULL/48000);sample+=480;last_audio=now;}
   }
   if(!clients && now-idle>20000000000ULL)break;

@@ -32,7 +32,10 @@ typedef struct {
  _Atomic unsigned reading;
  _Atomic uint64_t heartbeat;
 } hd_lease;
-typedef struct { hd_mode mode;uint64_t timestamp;uint32_t bytes;uint8_t data[HD_SHARED_FRAME]; } hd_shared_frame;
+typedef struct { hd_mode mode;uint64_t timestamp;uint32_t bytes;uint8_t data[HD_SHARED_FRAME];uint32_t source_scan; } hd_shared_frame;
+/* source_scan consumes the v1 frame's four trailing padding bytes. Existing
+ * clients retain identical offsets/size and ignore the additional metadata. */
+_Static_assert(sizeof(hd_shared_frame)==HD_SHARED_FRAME+40,"shared frame ABI changed");
 typedef struct { _Atomic uint64_t serial;uint64_t timestamp;uint32_t bytes,rate;uint8_t data[HD_SHARED_PCM]; } hd_shared_pcm;
 typedef struct {
  _Atomic uint64_t magic;

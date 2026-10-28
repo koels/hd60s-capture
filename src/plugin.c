@@ -8,13 +8,14 @@
 #include "capture.h"
 #include "shared.h"
 #include "processing.h"
+#include "display-aspect.h"
 #include "status-frame.h"
 OBS_DECLARE_MODULE()
 MODULE_EXPORT const char *obs_module_description(void) { return "Native HD60 S video and audio capture"; }
-typedef struct { unsigned width,height,fps; int matrix,range,format; double gain; bool mute,limiter,release_hidden; } settings;
+typedef struct { unsigned width,height,fps; int matrix,range,format,aspect; double gain; bool mute,limiter,release_hidden; } settings;
 struct source {
  obs_source_t *source; pthread_t thread; pthread_mutex_t lock; atomic_bool stop; bool started;
- settings config; hd_mode input; hd_audio_state audio_state;
+ settings config; hd_mode input; unsigned source_scan; hd_audio_state audio_state;
  float pcm[2048]; uint64_t next_video,report; float peak; uint64_t clipped,samples;
  video_scaler_t *scaler; struct obs_source_frame *converted;
  struct video_scale_info old_in,old_out;
@@ -59,6 +60,7 @@ static void show_status(struct source *s) {
  hd_status state=s->connection;settings c=s->config;
  unsigned w=c.width?c.width:s->last_width?s->last_width:1280;
  unsigned h=c.height?c.height:s->last_height?s->last_height:720;
+ if(s->input.width)hd_display_size(s->input.width,s->input.height,c.width,c.height,c.aspect,&w,&h);
  pthread_mutex_unlock(&s->lock);
  if(state!=HD_LIVE) {
   if(!s->status_pixels || w!=s->status_width || h!=s->status_height || state!=s->drawn_status) {
@@ -87,13 +89,17 @@ static void tick(void *ctx,float seconds) {
  if(s->connection==HD_LIVE && now-s->last_video>2000000000ULL) set_connection(s,HD_INITIALIZING,"no frame delivered for 2 s");
  pthread_mutex_unlock(&s->lock);show_status(s);
 }
+static void scan(void *ctx,unsigned value) {
+ struct source *s=ctx;pthread_mutex_lock(&s->lock);s->source_scan=value;pthread_mutex_unlock(&s->lock);
+}
 static void video(void *ctx,const uint8_t *data,const hd_mode *m,uint64_t timestamp) {
  struct source *s=ctx; settings c=snapshot(s);
  pthread_mutex_lock(&s->lock); s->input=*m; pthread_mutex_unlock(&s->lock);
  if(!hd_frame_due(timestamp,c.fps,&s->next_video)) return;
  enum video_colorspace matrix=c.matrix==1?VIDEO_CS_601:c.matrix==2?VIDEO_CS_709:m->bt709?VIDEO_CS_709:VIDEO_CS_601;
  enum video_range_type range=c.range==2?VIDEO_RANGE_FULL:VIDEO_RANGE_PARTIAL;
- unsigned width=c.width?c.width:m->width,height=c.height?c.height:m->height;
+ unsigned width,height;
+ hd_display_size(m->width,m->height,c.width,c.height,c.aspect,&width,&height);
  enum video_format format=c.format==1?VIDEO_FORMAT_NV12:c.format==2?VIDEO_FORMAT_BGRA:VIDEO_FORMAT_YUY2;
  struct obs_source_frame f={0},*out=&f;
  f.data[0]=(uint8_t *)data; f.linesize[0]=m->width*2; f.width=m->width; f.height=m->height; f.format=VIDEO_FORMAT_YUY2;
@@ -137,6 +143,7 @@ static void update(void *ctx,obs_data_t *data) {
  struct source *s=ctx; settings c={0};
  int resolution=(int)obs_data_get_int(data,"resolution");
  switch(resolution) { case 1:c.width=640;c.height=480;break; case 2:c.width=720;c.height=480;break; case 3:c.width=1280;c.height=720;break; case 4:c.width=1920;c.height=1080;break; }
+ c.aspect=(int)obs_data_get_int(data,"aspect");if(c.aspect<0 || c.aspect>2)c.aspect=0;
  int fps=(int)obs_data_get_int(data,"fps");
  switch(fps) { case 23976:case 24000:case 25000:case 29970:case 30000:case 50000:case 59940:case 60000:c.fps=fps;break; }
  c.matrix=(int)obs_data_get_int(data,"matrix"); c.range=(int)obs_data_get_int(data,"range"); c.format=(int)obs_data_get_int(data,"format");
@@ -146,7 +153,7 @@ static void update(void *ctx,obs_data_t *data) {
  pthread_mutex_lock(&s->lock); s->config=c; pthread_mutex_unlock(&s->lock);
 }
 static void defaults(obs_data_t *d) {
- obs_data_set_default_int(d,"resolution",0); obs_data_set_default_int(d,"fps",0);
+ obs_data_set_default_int(d,"aspect",0);obs_data_set_default_int(d,"resolution",0); obs_data_set_default_int(d,"fps",0);
  obs_data_set_default_int(d,"matrix",0); obs_data_set_default_int(d,"range",0); obs_data_set_default_int(d,"format",0);
  obs_data_set_default_double(d,"gain_db",-6); obs_data_set_default_bool(d,"limiter",true);
  obs_data_set_default_bool(d,"release_hidden",true);
@@ -155,10 +162,13 @@ static obs_property_t *list(obs_properties_t *p,const char *key,const char *labe
 static bool refresh(obs_properties_t *props,obs_property_t *button,void *ctx) {
  (void)button; struct source *s=ctx; if(!s) return false;
  pthread_mutex_lock(&s->lock);
- hd_mode m=s->input; float peak=s->peak; uint64_t clipped=s->clipped,samples=s->samples; s->peak=0;
+ hd_mode m=s->input;unsigned source_scan=s->source_scan;settings c=s->config; float peak=s->peak; uint64_t clipped=s->clipped,samples=s->samples; s->peak=0;
  pthread_mutex_unlock(&s->lock);
  char text[512];
- if(m.width) snprintf(text,sizeof text,"HDMI input: %u × %u, %.3f fps; audio %u Hz. Raw peak since last refresh: %.1f dBFS. Near-full-scale samples: %llu / %llu.",m.width,m.height,m.rate/(m.fractional?1.001:1),m.audio_rate,20*log10(fmax(peak,1e-9)),(unsigned long long)clipped,(unsigned long long)samples);
+ if(m.width) {
+  unsigned w,h;hd_display_size(m.width,m.height,c.width,c.height,c.aspect,&w,&h);
+  snprintf(text,sizeof text,"HDMI input: %u × %u, %s, %.3f %s; output %u × %u; audio %u Hz. Raw peak: %.1f dBFS. Near-full-scale samples: %llu / %llu.",m.width,m.height,source_scan==2?"Interlaced":source_scan==1?"Progressive":"scan unknown",m.rate/(m.fractional?1.001:1),source_scan==2?"fields/s":"fps",w,h,m.audio_rate,20*log10(fmax(peak,1e-9)),(unsigned long long)clipped,(unsigned long long)samples);
+ }
  else snprintf(text,sizeof text,"Waiting for HDMI input. Audio diagnostics appear after capture starts.");
  obs_property_set_description(obs_properties_get(props,"status"),text); return true;
 }
@@ -168,6 +178,10 @@ static obs_properties_t *properties(void *ctx) {
  obs_properties_add_button2(p,"refresh","Refresh input and levels",refresh,ctx);
  v=list(p,"resolution","Output resolution");
  obs_property_list_add_int(v,"Match HDMI input",0);obs_property_list_add_int(v,"640 × 480 (4:3)",1);obs_property_list_add_int(v,"720 × 480",2);obs_property_list_add_int(v,"1280 × 720",3);obs_property_list_add_int(v,"1920 × 1080",4);
+ obs_property_set_long_description(v,"Fits the selected display aspect ratio inside these dimensions without cropping. Match input preserves input height and corrects width for square pixels.");
+ v=list(p,"aspect","Display aspect ratio");
+ obs_property_list_add_int(v,"Auto (SD 4:3, HD square pixels)",0);obs_property_list_add_int(v,"4:3",1);obs_property_list_add_int(v,"16:9",2);
+ obs_property_set_long_description(v,"Corrects SD non-square pixels before sending frames to OBS. Choose 16:9 for anamorphic widescreen. Independent of the app preview setting.");
  v=list(p,"fps","Frame rate");obs_property_list_add_int(v,"Match HDMI input",0);
  const int rates[]={23976,24000,25000,29970,30000,50000,59940,60000};const char *labels[]={"23.976","24","25","29.97","30","50","59.94","60"};
  for(unsigned i=0;i<8;i++) obs_property_list_add_int(v,labels[i],rates[i]);
@@ -206,7 +220,7 @@ static void source_hide(void *ctx) {
 }
 static void *worker(void *ctx) {
  struct source *s=ctx;
- hd_callbacks cb={.video=video,.audio=audio,.message=message,.context=s,.status=connection_status};
+ hd_callbacks cb={.video=video,.audio=audio,.message=message,.context=s,.status=connection_status,.scan=scan};
  s->next_video=0;s->audio_state=(hd_audio_state){0};
  hd_shared_capture(&cb,&s->stop,0);
  reset_scaler(s);

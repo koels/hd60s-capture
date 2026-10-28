@@ -40,7 +40,7 @@ build/test-parser: tests/parser.c src/capture.c src/device.c src/capture.h
 build/test-processing: tests/processing.c src/processing.h
 	mkdir -p build
 	$(CC) $(TESTFLAGS) tests/processing.c -o $@
-build/test-scaler: tests/scaler.c
+build/test-scaler: tests/scaler.c src/display-aspect.h
 	$(CC) $(CFLAGS) tests/scaler.c -I$(OBS_SRC)/libobs -I$(SIMDE_SRC) -Ibuild/include -F"$(OBS_APP)/Contents/Frameworks" -framework libobs -Wl,-rpath,"$(OBS_APP)/Contents/Frameworks" -o $@
 test-video: build/test-scaler
 	./build/test-scaler
@@ -48,7 +48,11 @@ build/test-status-frame: tests/status-frame.c src/status-frame.c src/status-fram
 	$(CC) $(TESTFLAGS) tests/status-frame.c src/status-frame.c -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework ImageIO -o $@
 build/test-service-identity: tests/service-identity.c src/shared-internal.h src/capture.h
 	$(CC) $(TESTFLAGS) tests/service-identity.c -o $@
-test: build/test-parser build/test-processing build/test-status-frame build/test-service-identity
+build/test-display-aspect: tests/display-aspect.c src/display-aspect.h
+	$(CC) $(TESTFLAGS) tests/display-aspect.c -o $@
+
+test: build/test-display-aspect build/test-parser build/test-processing build/test-status-frame build/test-service-identity
+	./build/test-display-aspect
 	./build/test-parser
 	./build/test-processing
 	./build/test-status-frame
@@ -56,7 +60,7 @@ test: build/test-parser build/test-processing build/test-status-frame build/test
 plugin: service $(PLUGIN)/Contents/MacOS/hd60s-native
 	cp build/hd60s-service $(PLUGIN)/Contents/MacOS/
 	codesign --force --sign - $(PLUGIN)
-$(PLUGIN)/Contents/MacOS/hd60s-native: src/plugin.c src/shared-client.c src/shared.h src/shared-internal.h src/status-frame.c src/status-frame.h src/capture.h src/processing.h packaging/Info.plist packaging/obsconfig.h VERSION
+$(PLUGIN)/Contents/MacOS/hd60s-native: src/plugin.c src/display-aspect.h src/shared-client.c src/shared.h src/shared-internal.h src/status-frame.c src/status-frame.h src/capture.h src/processing.h packaging/Info.plist packaging/obsconfig.h VERSION
 	mkdir -p $(PLUGIN)/Contents/MacOS build/include
 	cp packaging/obsconfig.h build/include/
 	$(CC) $(CFLAGS) -fPIC -bundle src/plugin.c src/shared-client.c src/status-frame.c -I$(OBS_SRC)/libobs -I$(SIMDE_SRC) -Ibuild/include -F"$(OBS_APP)/Contents/Frameworks" -framework libobs -framework CoreGraphics -framework CoreText $(FRAMEWORKS) -Wl,-rpath,"$(OBS_APP)/Contents/Frameworks" -o $@
@@ -73,7 +77,7 @@ clean:
 
 APP = build/HD60 S Capture.app
 .PHONY: app
-app: service build/AppIcon.icns app/PluginInstaller.m app/PluginInstaller.h src/status-frame.c src/status-frame.h src/shared-client.c src/shared.h src/shared-internal.h src/device.c src/capture.h src/processing.h app/main.m packaging/AppInfo.plist VERSION $(SPARKLE_SRC)/Sparkle.framework
+app: service build/AppIcon.icns app/PluginInstaller.m app/PluginInstaller.h src/status-frame.c src/status-frame.h src/shared-client.c src/shared.h src/shared-internal.h src/device.c src/capture.h src/processing.h app/main.m src/display-aspect.h packaging/AppInfo.plist VERSION $(SPARKLE_SRC)/Sparkle.framework
 	mkdir -p "$(APP)/Contents/MacOS"
 	$(CC) $(CFLAGS) -Isrc -c src/device.c -o build/app-device.o
 	$(CC) $(CFLAGS) -Isrc -c src/shared-client.c -o build/app-shared.o

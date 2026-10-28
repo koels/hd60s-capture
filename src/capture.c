@@ -195,6 +195,7 @@ static void parse(state *s,const uint8_t *data,size_t count) {
    if(blank && !s->blank && s->frame_started) {
     if(s->rows==s->mode.height/(s->interlaced?2:1)) {
      if(!s->frames) status_event(s,HD_LIVE,"Receiving video and audio");
+     if(s->cb.scan) s->cb.scan(s->cb.context,s->interlaced?2:1);
      if(s->cb.video) s->cb.video(s->cb.context,s->frame,&s->mode,video_time(s));
      ++s->frames; ++s->delivered;
     } else { ++s->partial; ++s->frames; }

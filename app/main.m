@@ -9,6 +9,7 @@
 #include "capture.h"
 #include "shared.h"
 #include "processing.h"
+#include "display-aspect.h"
 #include "status-frame.h"
 #import <Sparkle/Sparkle.h>
 #import "PluginInstaller.h"
@@ -34,8 +35,10 @@
  CMAudioFormatDescriptionRef recordAudioFormat;
  uint64_t recordEpoch; BOOL recordSessionStarted;
  hd_mode recordMode,liveMode; BOOL haveLiveMode;
+ unsigned sourceScan; // Capture worker only; snapshot with each frame for UI.
 }
 - (void)fitWindowToInput;
+- (void)layoutPicture;
 @property NSWindow *window;
 @property NSView *preview;
 @property CALayer *picture;
@@ -175,8 +178,9 @@ static void captureVideo(void *ctx,const uint8_t *bytes,const hd_mode *mode,uint
   CGImageRef rendered=[app.imageContext createCGImage:image fromRect:CGRectMake(0,0,mode->width,mode->height)];
   CVPixelBufferRelease(pixel);
   if(!rendered) { atomic_store(&app->framePending,false);return; }
-  NSString *size=[NSString stringWithFormat:@"%u × %u",mode->width,mode->height];
-  NSString *rate=[NSString stringWithFormat:@"%.2f fps",mode->rate/(mode->fractional?1.001:1)];
+  NSString *scan=app->sourceScan==2?@"Interlaced":app->sourceScan==1?@"Progressive":@"Scan unknown";
+  NSString *size=[NSString stringWithFormat:@"%u × %u · %@",mode->width,mode->height,scan];
+  NSString *rate=[NSString stringWithFormat:@"%.2f %@",mode->rate/(mode->fractional?1.001:1),app->sourceScan==2?@"fields/s":@"fps"];
   NSString *sound=mode->audio_rate?[NSString stringWithFormat:@"%u kHz stereo",mode->audio_rate/1000]:@"no audio";
   hd_mode current=*mode;
   uint64_t generation=atomic_load(&app->session);
@@ -185,6 +189,7 @@ static void captureVideo(void *ctx,const uint8_t *bytes,const hd_mode *mode,uint
     BOOL geometryChanged=!app->haveLiveMode || app->liveMode.width!=current.width || app->liveMode.height!=current.height;
     app->liveMode=current;app->haveLiveMode=YES;
     if(geometryChanged) [app fitWindowToInput];
+    [app layoutPicture];
     app.picture.contents=(__bridge id)rendered;app.placeholder.hidden=YES;app.statusKey=nil;
     app.badge.stringValue=@"Live";app.badge.textColor=NSColor.whiteColor;app.badgeDot.layer.backgroundColor=NSColor.systemGreenColor.CGColor;
     app.sizeChip.stringValue=size;app.rateChip.stringValue=rate;app.audioChip.stringValue=sound;app.chips.hidden=NO;
@@ -194,13 +199,14 @@ static void captureVideo(void *ctx,const uint8_t *bytes,const hd_mode *mode,uint
   });
  }
 }
+static void captureScan(void *ctx,unsigned scan) { ((__bridge CaptureApp *)ctx)->sourceScan=scan; }
 static void captureAudio(void *ctx,const uint8_t *data,size_t bytes,unsigned rate,uint64_t timestamp) {
  [(__bridge CaptureApp *)ctx pushAudio:data bytes:bytes rate:rate timestamp:timestamp];
 }
 static void *captureWorker(void *ctx) {
  CaptureApp *app=(__bridge CaptureApp *)ctx;
  @autoreleasepool {
-  hd_callbacks callbacks={.video=captureVideo,.audio=captureAudio,.message=captureMessage,.context=ctx,.status=captureStatus};
+  hd_callbacks callbacks={.video=captureVideo,.audio=captureAudio,.message=captureMessage,.context=ctx,.status=captureStatus,.scan=captureScan};
   hd_shared_capture(&callbacks,&app->stop,0);
  }
  return NULL;
@@ -395,10 +401,31 @@ static void *captureWorker(void *ctx) {
 
 #pragma mark - Settings
 
+- (void)layoutPicture {
+ NSRect bounds=self.preview.bounds,rect=bounds;
+ if(haveLiveMode) {
+  NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
+  NSInteger fit=[defaults integerForKey:@"previewFit"];
+  double aspect=hd_display_aspect(liveMode.width,liveMode.height,(int)[defaults integerForKey:@"displayAspect"]);
+  if(fit!=2 && bounds.size.height>0) {
+   BOOL byWidth=fit==1?bounds.size.width/bounds.size.height>aspect:bounds.size.width/bounds.size.height<aspect;
+   if(byWidth)rect.size.height=rect.size.width/aspect;
+   else rect.size.width=rect.size.height*aspect;
+   rect.origin.x+=(bounds.size.width-rect.size.width)/2;
+   rect.origin.y+=(bounds.size.height-rect.size.height)/2;
+  }
+ }
+ [CATransaction begin];[CATransaction setDisableActions:YES];
+ self.picture.contentsGravity=kCAGravityResize;self.picture.frame=rect;
+ [CATransaction commit];
+}
 - (void)applyFit:(int)index {
- NSString *gravity=index==1?kCAGravityResizeAspectFill:index==2?kCAGravityResize:kCAGravityResizeAspect;
- [CATransaction begin];[CATransaction setDisableActions:YES];self.picture.contentsGravity=gravity;[CATransaction commit];
  [[NSUserDefaults standardUserDefaults] setInteger:index forKey:@"previewFit"];
+ [self layoutPicture];
+}
+- (void)aspectChanged:(NSSegmentedControl *)sender {
+ [[NSUserDefaults standardUserDefaults] setInteger:sender.selectedSegment forKey:@"displayAspect"];
+ [self fitWindowToInput];[self layoutPicture];
 }
 - (void)fitChanged:(NSSegmentedControl *)sender { [self applyFit:(int)sender.selectedSegment]; }
 - (void)gainChanged:(NSSlider *)sender {
@@ -498,10 +525,14 @@ static NSTextField *settingsNote(NSString *text) {
  fit.selectedSegment=[defaults integerForKey:@"previewFit"];
  NSStackView *fitRow=[NSStackView stackViewWithViews:@[label(@"Picture",12,NSFontWeightRegular,NSColor.labelColor),fit]];
  fitRow.spacing=10;fitRow.alignment=NSLayoutAttributeCenterY;
+ NSSegmentedControl *aspect=[NSSegmentedControl segmentedControlWithLabels:@[@"Auto",@"4:3",@"16:9"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(aspectChanged:)];
+ aspect.selectedSegment=[defaults integerForKey:@"displayAspect"];
+ NSStackView *aspectRow=[NSStackView stackViewWithViews:@[label(@"Aspect ratio",12,NSFontWeightRegular,NSColor.labelColor),aspect]];
+ aspectRow.spacing=10;aspectRow.alignment=NSLayoutAttributeCenterY;
  NSButton *keepBar=[NSButton checkboxWithTitle:@"Keep the control bar on screen in full screen" target:self action:@selector(overlayAlwaysChanged:)];
  keepBar.state=[defaults boolForKey:@"overlayAlwaysVisible"]?NSControlStateValueOn:NSControlStateValueOff;
- return [self paneTitled:@"Video" symbol:@"rectangle.on.rectangle" rows:@[fitRow,keepBar,
-  settingsNote(@"Fit keeps the console's own shape. Fill crops to the window. Stretch distorts, which is only useful for a source with a wrong aspect flag.")]];
+ return [self paneTitled:@"Video" symbol:@"rectangle.on.rectangle" rows:@[fitRow,aspectRow,keepBar,
+  settingsNote(@"Auto displays SD video as 4:3. Select 16:9 for anamorphic widescreen. Fit preserves that shape, Fill crops, and Stretch fills the window. Aspect ratio applies to preview.")]];
 }
 - (NSViewController *)buildRecordingPane {
  NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
@@ -653,7 +684,7 @@ static NSTextField *settingsNote(NSString *text) {
 - (void)tick:(NSTimer *)timer {
  (void)timer;[self updateModeLine];[self refreshCaptureSummary];
  if(++self.updateTicks%20==0) [self checkForUpdate];
- [CATransaction begin];[CATransaction setDisableActions:YES];self.picture.frame=self.preview.bounds;[CATransaction commit];
+ [CATransaction begin];[CATransaction setDisableActions:YES];[self layoutPicture];[CATransaction commit];
  if(!self.placeholder.hidden && self.statusKey && self.shownTitle) {
   NSArray *parts=[self.statusKey componentsSeparatedByString:@"|"];
   NSSize p=self.preview.bounds.size;CGFloat b=self.window.backingScaleFactor>0?self.window.backingScaleFactor:2;
@@ -744,7 +775,7 @@ static NSTextField *settingsNote(NSString *text) {
 - (NSSize)windowWillResize:(NSWindow *)window toSize:(NSSize)size {
  if(haveLiveMode && ![self isFullScreen]) {
   CGFloat overhead=window.frame.size.height-self.preview.bounds.size.height;
-  size.height=(size.width-36)*liveMode.height/liveMode.width+overhead;
+  size.height=(size.width-36)/hd_display_aspect(liveMode.width,liveMode.height,(int)[NSUserDefaults.standardUserDefaults integerForKey:@"displayAspect"])+overhead;
  }
  return size;
 }
@@ -757,12 +788,12 @@ static NSTextField *settingsNote(NSString *text) {
  if(size.height>visible.size.height) {
   CGFloat overhead=frame.size.height-self.preview.bounds.size.height;
   size.height=visible.size.height;
-  size.width=(size.height-overhead)*liveMode.width/liveMode.height+36;
+  size.width=(size.height-overhead)*hd_display_aspect(liveMode.width,liveMode.height,(int)[NSUserDefaults.standardUserDefaults integerForKey:@"displayAspect"])+36;
  }
  frame.origin.y+=frame.size.height-size.height;frame.size=size;
  [self.window setFrame:frame display:YES];
  [self.window.contentView layoutSubtreeIfNeeded];
- self.picture.frame=self.preview.bounds;
+ [self layoutPicture];
 }
 - (void)windowDidEnterFullScreen:(NSNotification *)notification {
  (void)notification;

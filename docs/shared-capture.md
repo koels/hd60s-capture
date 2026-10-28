@@ -103,3 +103,9 @@ animations are disabled to prevent per-frame transitions in the preview.
 OBS uses its own bundled shared client/helper. It does not launch the native app
 or require that app to remain running. The per-user launchd service owns USB.
 The native app and OBS can each start it independently.
+
+The app receives each frame's source scan type (progressive or interlaced)
+separately from the progressive pixels used for display and recording. The
+metadata occupies the existing four trailing padding bytes in a v1 shared
+frame, preserving offsets and map size for older OBS clients. A zero value
+from an older service is shown as unknown, rather than guessed from resolution.

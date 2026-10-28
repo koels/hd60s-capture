@@ -17,6 +17,9 @@ typedef struct {
  void (*message)(void *,const char *);
  void *context;
  void (*status)(void *,hd_status,const char *);
+ /* Source scan type, delivered immediately before each video callback.
+  * 0 unknown (older service), 1 progressive, 2 interlaced/bob output. */
+ void (*scan)(void *,unsigned);
 } hd_callbacks;
 /* Blocking worker. Stop is set by caller; callbacks occur on worker thread. */
 int hd_capture(const hd_callbacks *,const atomic_bool *stop,double seconds);

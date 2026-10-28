@@ -220,7 +220,7 @@ int hd_shared_capture(const hd_callbacks *cb,const atomic_bool *stop,double seco
    if(index<3) {
     atomic_store_explicit(&lease->reading,index,memory_order_seq_cst);
     if(token==atomic_load_explicit(&map->video_token,memory_order_seq_cst)) {
-     hd_shared_frame *f=&map->frames[index];hd_mode mode=f->mode;uint64_t timestamp=f->timestamp;unsigned bytes=f->bytes;
+     hd_shared_frame *f=&map->frames[index];hd_mode mode=f->mode;uint64_t timestamp=f->timestamp;unsigned bytes=f->bytes,scan=f->source_scan;
      if(mode.width>=320 && mode.width<=1920 && mode.height>=200 && mode.height<=1080 && !(mode.width%2) && bytes==(size_t)mode.width*mode.height*2 && bytes<=HD_SHARED_FRAME) {
       memcpy(pixels,f->data,bytes);atomic_store_explicit(&lease->reading,HD_NO_FRAME,memory_order_seq_cst);
       /* Frame timestamps are synthesized from the nominal frame rate, so lost frames
@@ -232,6 +232,7 @@ int hd_shared_capture(const hd_callbacks *cb,const atomic_bool *stop,double seco
         char text[192];snprintf(text,sizeof text,"Stale-frame drops ended after %llu frame%s; worst lag %.2f s",(unsigned long long)stale,stale==1?"":"s",worst_age/1e9);
         cb->message(cb->context,text);stale=0;worst_age=0;
        }
+       if(cb->scan)cb->scan(cb->context,scan<=2?scan:0);
        if(cb->video)cb->video(cb->context,pixels,&mode,timestamp);frames++;
       } else {
        stale++;if(age>worst_age)worst_age=age;

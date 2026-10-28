@@ -25,6 +25,7 @@ public_key=$(.deps/sparkle/bin/generate_keys --account hd60s-capture -p)
 
 make bundle
 make test
+make test-video
 make test-shared
 codesign --verify --deep --strict "build/HD60 S Capture.app"
 

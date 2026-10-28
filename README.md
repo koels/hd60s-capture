@@ -24,7 +24,7 @@ Both can use the card at the same time, because one small background service
 owns the card and hands frames to each of them.
 
 <p align="center">
-  <img src="docs/images/app.png" width="800" alt="HD60 S Capture showing a Wii's HOME menu, with the input's resolution, frame rate and audio format in the top right and the control bar over the picture">
+  <img src="docs/images/app.png" width="800" alt="HD60 S Capture showing a Wii's HOME menu, with the input's resolution, Progressive scan label, frame rate and audio format in the top right and the control bar over the picture">
 </p>
 
 > **Made with AI.** The app, the USB driver, the OBS source and this README were
@@ -68,8 +68,9 @@ Inputs: progressive video up to 1920 × 1080, plus interlaced 480i, 576i and
 Interlaced fields are converted to full-height progressive frames at the field
 rate for preview, recording and OBS. Bob deinterlacing repeats each field line;
 it preserves motion cadence but has less vertical detail than motion-adaptive
-deinterlacing. 1080i has been tested on revision 4; 480i and 576i still need
-hardware validation. HDCP-protected sources are not captured.
+deinterlacing. 1080i and 480i have been confirmed working on revision 4; 576i still needs
+hardware validation. The resolution chip identifies Interlaced or Progressive
+input; interlaced cadence is shown in fields/s. HDCP-protected sources are not captured.
 
 Needs macOS 13 or later on Apple silicon, and a USB 3 port.
 
@@ -101,14 +102,20 @@ Settings (in the app menu, the slider icon in the bar, or **Command-comma**) has
 | | |
 |---|---|
 | **Audio** | Play the capture through this Mac, gain, mute playback, the −1 dBFS peak limiter, and a live peak reading. |
-| **Video** | How the picture fills the window (fit, fill or stretch), and whether the control bar stays visible in full screen. |
+| **Video** | How the picture fills the window (fit, fill or stretch), preview aspect ratio (Auto, 4:3 or 16:9), and whether the control bar stays visible in full screen. |
 | **Recording** | Where movies are saved (`~/Movies/HD60 S Capture/` by default) and the quality, standard or high. |
 | **Capture** | What the card and the signal are doing right now, and a button to update the OBS source. |
 
 <p align="center">
   <img src="docs/images/settings-audio.png" width="420" alt="Audio settings">
+  <img src="docs/images/settings-video.png" width="420" alt="Video settings with Fit, Fill and Stretch plus Auto, 4:3 and 16:9 aspect controls">
   <img src="docs/images/settings-capture.png" width="420" alt="Capture settings, showing the card connected and a 720 × 480 signal at 59.94 fps">
 </p>
+
+Auto aspect ratio displays 720- or 1440-sample SD inputs as 4:3. Choose 16:9
+for anamorphic widescreen sources. The app's aspect controls affect its preview;
+recordings retain their captured dimensions. The OBS source has an independent
+aspect-ratio setting that corrects the frames it sends to OBS.
 
 Your choices are remembered between launches. Mute affects playback only; a
 recording keeps its sound.
@@ -117,7 +124,17 @@ recording keeps its sound.
 
 1. In OBS, **Sources → Add → HD60 S Native**.
 2. Video and sound come in together; you do not need a separate audio source.
-3. Use **Transform → Fit to Screen** to fill the canvas.
+3. Use **Transform → Fit to Screen** to fit the picture on the canvas.
+
+To keep the source fitted as its aspect ratio changes, open **Transform →
+Edit Transform**, choose **Fit** under **Bounds**, and set the bounding box to
+your canvas dimensions (for example 1920 × 1080), with centered bounds
+alignment. A 4:3 picture then has side bars on a 16:9 canvas, and a 16:9 picture
+fills it. **Stretch** bounds force every input to fill the box and override
+the source's intended shape.
+
+To hide part of the picture, use the **Crop** values in **Edit Transform**.
+Cropping and display aspect ratio are separate controls.
 
 Hiding the source with the eye icon releases the card for other apps, and
 showing it takes the card back. Turn that off per source with **Release the
@@ -128,8 +145,14 @@ Double-click the source to open its properties. Changes apply live, without
 restarting the stream:
 
 - **Output resolution:** match input, 640 × 480, 720 × 480, 1280 × 720 or
-  1920 × 1080. Scaling resizes the received frame; it does not change the
+  1920 × 1080. Presets bound the output dimensions; the selected display aspect
+  ratio fits inside without cropping or stretching. Match input retains input
+  height and corrects width for square pixels. Scaling does not change the
   console's HDMI mode or add detail.
+- **Display aspect ratio:** Auto, 4:3 or 16:9, independent of the app setting.
+  Auto treats 720- and 1440-sample SD inputs as 4:3 and HD as square pixels.
+  For example, a 1440 × 480 interlaced signal produces 640 × 480 frames in OBS
+  at 4:3. Select 16:9 for anamorphic widescreen.
 - **Frame-rate limit:** match input, or a cap from 23.976 to 60. It drops
   frames and never invents them. The recording or stream frame rate is still
   set in **OBS Settings → Video**.
@@ -137,8 +160,8 @@ restarting the stream:
 - **Color space and range:** automatic by default, with Rec. 601, Rec. 709 and
   a limited or full range override for test patterns that need one.
 - **Audio:** −30 to +6 dB gain (−6 dB to start), mute, and a −1 dBFS limiter.
-- **Refresh input and audio levels:** the current HDMI mode, the raw peak since
-  the last refresh, and a count of near-full-scale samples before gain.
+- **Refresh input and audio levels:** the current HDMI mode and scan type,
+  corrected output dimensions, the raw peak since the last refresh, and a count of near-full-scale samples before gain.
 
 For hardware encoding, choose **Apple VT H.264 Hardware** or **Apple VT HEVC
 Hardware** in **OBS Settings → Output**; encoding belongs to the OBS output,
@@ -251,13 +274,17 @@ Tested on an HD60 S revision 4 capturing a Wii at 720 × 480, 59.94 fps, with
 - Updates from GitHub with the app closed and OBS open, without OBS restarting.
 - Parser, audio processing, status screen and shared-memory tests, run with
   AddressSanitizer and UndefinedBehaviorSanitizer (`make test`, `make test-shared`).
+- Aspect correction for SD input and OBS scaler conversions for 720- and
+  1440-sample SD input in YUY2, NV12 and BGRA (`make test-video`).
 
-Also confirmed: 1920 × 1080 progressive at 59.94 fps with 48 kHz stereo.
+Also confirmed: 1920 × 1080 progressive at 59.94 fps with 48 kHz stereo,
+1080i and 480i capture with bob deinterlacing, and recovery from interlaced
+back to progressive input without reconnecting USB.
 720p is assumed working, pending a separate hardware test. The window follows
 the incoming video aspect ratio without cropping.
 
 Not yet tested or not implemented: revisions 1 to 3,
-480i and 576i on hardware, analog audio, more than one card, long-run audio and video
+576i on hardware, analog audio, more than one card, long-run audio and video
 drift, and calibrated color accuracy.
 
 ## Credits and license
