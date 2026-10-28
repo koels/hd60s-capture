@@ -11,7 +11,8 @@ implementation; they do not imply support for other hardware revisions.
 - Vendor requests use device recipient, 0x40 OUT or 0xc0 IN.
 - C0 value 0064: MCU register file. Status index 0, length 32:
   vertical total LE16 at 4, horizontal total at 6, active height at 8,
-  width at 10, rate at 12, flags at 13, audio kHz at 14.
+  width at 10, rate at 12, flags at 13, audio kHz at 14. For interlaced
+  input, active height is per field and rate is the field rate.
 - Mode flags: bit 0 interlaced; bit 1 fractional 1000/1001; bit 3 HDCP;
   bits 5:4 color matrix (1=709, 2=601).
 - Registers: stream 10, range 12 (0=bypass), picture 13 (four neutral 80 bytes),
@@ -23,10 +24,16 @@ implementation; they do not imply support for other hardware revisions.
 - Stop: select alternate 0 before canceling reads, drain callbacks, wait 35 ms,
   disarm and disable stream. Ordering avoids filling FX3 DMA while EP0 waits.
 - Data records have 4-byte headers: FF 00 00 XY then width*2 YUY2 bytes for
-  each active OR blanking line. XY=80 active and AB blank for progressive input.
+  each active OR blanking line. XY=80 active and AB blank for field 0;
+  C7 active and EC blank for field 1. These are BT.656 SAV codes, including parity.
 - FF 00 FF nn introduces nn*4 bytes of little-endian signed stereo 16-bit PCM.
   Records can cross USB read boundaries. Video payload is never marker-scanned.
-- Frame start/end are blanking transitions. Incomplete frames are discarded.
+- Frame/field start and end are blanking transitions. Incomplete units are
+  discarded. Interlaced fields are bob-deinterlaced by repeating each line into
+  two output rows, producing full-height progressive frames at the field rate.
+  This keeps the shared-memory client ABI unchanged; clients receive progressive
+  frames for preview, recording and OBS. A change between progressive and
+  interlaced input restarts capture even when output dimensions are identical.
   Audio is batched into approximately 10 ms blocks for OBS.
 - Timing uses one monotonic epoch and counted video frames/audio samples.
   Long-term drift correction and discontinuity-aware audio recovery remain work.

@@ -62,10 +62,14 @@ the most useful thing you can send. If it does not answer like revision 4, the
 app and OBS say so plainly, and nothing is sent to the card beyond the setup
 commands revision 4 takes.
 
-Inputs: progressive video up to 1920 × 1080. 1080p at 59.94 fps has been confirmed working; 720p is expected to work.
-Interlaced signals do not work and are unsupported. Select progressive output
-(480p, 720p or 1080p) on the HDMI source. Capture waits for a supported signal
-and resumes automatically when progressive output returns. HDCP-protected sources are not captured.
+Inputs: progressive video up to 1920 × 1080, plus interlaced 480i, 576i and
+1080i with bob deinterlacing. 1080p at 59.94 fps has been confirmed working;
+720p is expected to work.
+Interlaced fields are converted to full-height progressive frames at the field
+rate for preview, recording and OBS. Bob deinterlacing repeats each field line;
+it preserves motion cadence but has less vertical detail than motion-adaptive
+deinterlacing. 1080i has been tested on revision 4; 480i and 576i still need
+hardware validation. HDCP-protected sources are not captured.
 
 Needs macOS 13 or later on Apple silicon, and a USB 3 port.
 
@@ -253,7 +257,7 @@ Also confirmed: 1920 × 1080 progressive at 59.94 fps with 48 kHz stereo.
 the incoming video aspect ratio without cropping.
 
 Not yet tested or not implemented: revisions 1 to 3,
-analog audio, more than one card, long-run audio and video
+480i and 576i on hardware, analog audio, more than one card, long-run audio and video
 drift, and calibrated color accuracy.
 
 ## Credits and license

@@ -25,7 +25,7 @@ struct state {
  CFRunLoopSourceRef events;
  hd_callbacks cb;
  hd_mode mode;
- bool active,gate,opened,blank,frame_started;
+ bool active,gate,opened,blank,frame_started,interlaced,detected_interlaced;
  transfer ring[RING]; unsigned pending,next;
  uint8_t header[4],audio[1020],pcm[4096],*frame;
  unsigned pcm_n;
@@ -147,14 +147,19 @@ static int init_device(state *s,const atomic_bool *stop) {
  return 0;
 }
 static unsigned le16(const uint8_t *d) { return d[0]|(d[1]<<8); }
-enum { MODE_READY=0, MODE_ABSENT=1, MODE_INTERLACED=2 };
+enum { MODE_READY=0, MODE_ABSENT=1 };
 static int decode_mode(state *s,hd_mode *m,const uint8_t b[32]) {
  unsigned w=le16(b+10),h=le16(b+8),ht=le16(b+6),vt=le16(b+4);
  if(!w && !h) return 1;
  if(w<320 || w>1920 || h<200 || h>1080 || w%2 || ht<w || vt<h || b[12]<20 || b[12]>130) {
   logmsg(s,"Invalid/unsupported timing: %ux%u @ %u, totals %ux%u",w,h,b[12],ht,vt); return -1;
  }
- if((b[13]&1) || h==240 || h==288 || h==540) return MODE_INTERLACED;
+ /* Revision 4 reports active lines per FIELD and field rate (upstream
+  * hd60s-core.c). Publish bob-deinterlaced progressive frames at that rate. */
+ bool interlaced=(b[13]&1) || h==240 || h==288 || h==540;
+ if(interlaced && h>540) { logmsg(s,"Unsupported interlaced field height: %u",h);return -1; }
+ s->detected_interlaced=interlaced;
+ if(interlaced) h*=2;
  if(b[13]&8) { logmsg(s,"HDCP-protected input cannot be captured"); return -1; }
  *m=(hd_mode){.width=w,.height=h,.rate=b[12],.fractional=!!(b[13]&2),.audio_rate=b[14]*1000,.bt709=((b[13]>>4)&3)!=2};
  if(m->audio_rate!=32000 && m->audio_rate!=44100 && m->audio_rate!=48000 && m->audio_rate!=96000 && m->audio_rate!=192000) m->audio_rate=0;
@@ -185,10 +190,10 @@ static void parse(state *s,const uint8_t *data,size_t count) {
    s->header_n=0; const uint8_t *h=s->header;
    if(h[0]!=255 || h[1]!=0) { ++s->bad; s->frame_started=false; continue; }
    if(h[2]==255) { s->remaining=h[3]*4; s->kind=2; s->audio_n=0; continue; }
-   if(h[2]!=0 || (h[3]!=0x80 && h[3]!=0xab)) { ++s->bad; s->frame_started=false; continue; }
-   bool blank=h[3]==0xab;
+   if(h[2]!=0 || (h[3]!=0x80 && h[3]!=0xab && (!s->interlaced || (h[3]!=0xc7 && h[3]!=0xec)))) { ++s->bad; s->frame_started=false; continue; }
+   bool blank=(h[3]&0x20)!=0;
    if(blank && !s->blank && s->frame_started) {
-    if(s->rows==s->mode.height) {
+    if(s->rows==s->mode.height/(s->interlaced?2:1)) {
      if(!s->frames) status_event(s,HD_LIVE,"Receiving video and audio");
      if(s->cb.video) s->cb.video(s->cb.context,s->frame,&s->mode,video_time(s));
      ++s->frames; ++s->delivered;
@@ -204,8 +209,12 @@ static void parse(state *s,const uint8_t *data,size_t count) {
    continue;
   }
   size_t take=count<s->remaining?count:s->remaining;
-  if(s->kind==1 && s->frame_started && s->rows<s->mode.height)
-   memcpy(s->frame+(size_t)s->rows*s->mode.width*2+s->line_n,data,take);
+  if(s->kind==1 && s->frame_started && s->rows<s->mode.height/(s->interlaced?2:1)) {
+   size_t stride=s->mode.width*2;
+   size_t row=s->rows*(s->interlaced?2:1);
+   memcpy(s->frame+row*stride+s->line_n,data,take);
+   if(s->interlaced) memcpy(s->frame+(row+1)*stride+s->line_n,data,take);
+  }
   if(s->kind==2) { memcpy(s->audio+s->audio_n,data,take); s->audio_n+=take; }
   s->line_n+=take; s->remaining-=take; data+=take; count-=take;
   if(!s->remaining) {
@@ -264,24 +273,17 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
    :"This HD60 S revision did not answer the way revision 4 does, so it is probably not supported yet. Retrying.");
   goto done;
  }
- int detected=MODE_ABSENT,previous=-1;
+ int detected=MODE_ABSENT;
  for(unsigned i=0;!atomic_load(stop);i++) {
   detected=detect(s,&s->mode); if(detected<=0) break;
-  /* Unsupported input is a waiting state, not a failed initialization. Keep
-   * polling the receiver so a switch back to progressive can start capture
-   * without repeatedly rebooting the MCU while the source renegotiates. */
-  if(detected!=previous) {
-   if(detected==MODE_INTERLACED) {
-    logmsg(s,"Interlaced input unsupported; waiting for progressive HDMI");
-    status_event(s,HD_ERROR,"Interlaced input is unsupported. Select 480p, 720p or 1080p on your source; capture resumes automatically.");
-   } else status_event(s,HD_NO_SIGNAL,"HD60 S connected. Turn on your HDMI source and check its cable.");
-   previous=detected;
-  }
-  if(i%10==0 && detected==MODE_ABSENT) logmsg(s,"Waiting for HDMI signal");
+  if(!i) status_event(s,HD_NO_SIGNAL,"HD60 S connected. Turn on your HDMI source and check its cable.");
+  if(i%10==0) logmsg(s,"Waiting for HDMI signal");
   usleep(200000);
  }
+ s->interlaced=s->detected_interlaced;
  if(detected || atomic_load(stop)) { if(detected<0) status_event(s,HD_ERROR,"Unable to read a supported HDMI mode. Try a progressive, unprotected source."); goto done; }
  logmsg(s,"Input: %ux%u @ %u%s, audio %u Hz, %s limited range",s->mode.width,s->mode.height,s->mode.rate,s->mode.fractional?"/1.001":"",s->mode.audio_rate,s->mode.bt709?"BT.709":"BT.601");
+ if(s->interlaced) logmsg(s,"Interlaced input: bob deinterlacing each field to %ux%u progressive",s->mode.width,s->mode.height);
  s->frame=malloc((size_t)s->mode.width*s->mode.height*2); if(!s->frame) goto done;
  for(unsigned i=0;i<RING;i++) { s->ring[i].s=s; if(posix_memalign((void **)&s->ring[i].data,CHUNK,CHUNK)) goto done; }
  if((*s->usb)->CreateInterfaceAsyncEventSource(s->usb,&s->events)) goto done;
@@ -314,8 +316,8 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
   if(now-report>1000000000) { logmsg(s,"Frames %llu, partial %llu, bad headers %llu, USB %.1f MB, audio samples %llu",s->frames,s->partial,s->bad,s->bytes/1e6,s->samples); report=now; }
   if(now-poll>interval) {
    hd_mode current={0}; int status=detect(s,&current); poll=now;
-   bool lost=status==MODE_ABSENT,bad_read=status<0 || status==MODE_INTERLACED;
-   bool changed=!status && (current.width!=s->mode.width || current.height!=s->mode.height || current.rate!=s->mode.rate || current.fractional!=s->mode.fractional || current.audio_rate!=s->mode.audio_rate || current.bt709!=s->mode.bt709);
+   bool lost=status==MODE_ABSENT,bad_read=status<0;
+   bool changed=!status && (s->detected_interlaced!=s->interlaced || current.width!=s->mode.width || current.height!=s->mode.height || current.rate!=s->mode.rate || current.fractional!=s->mode.fractional || current.audio_rate!=s->mode.audio_rate || current.bt709!=s->mode.bt709);
    /* The timing registers can read back zero or half-updated while the MCU
     * refreshes them, even with a perfectly stable source. Acting on a single
     * sample tears down a healthy capture, so confirm with quicker re-reads

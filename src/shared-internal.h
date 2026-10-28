@@ -106,6 +106,6 @@ static inline const char *hd_shared_status_text(unsigned state) {
  case HD_NO_SIGNAL:return "HD60 S connected. Check your HDMI source and cable.";
  case HD_BUSY:return "Another direct-capture driver owns the card. Close it to use shared capture.";
  case HD_LIVE:return "Receiving shared video and audio";
- default:return "Capture unavailable. Use progressive HDMI (480p, 720p or 1080p); interlaced input is unsupported. Retrying automatically…";
+ default:return "Shared capture interrupted. Retrying automatically…";
  }
 }
