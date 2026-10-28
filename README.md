@@ -45,6 +45,7 @@ owns the card and hands frames to each of them.
   color options of its own.
 - Clear status screens instead of a black box: no card, no signal, card in use,
   and starting up, each saying what to do next.
+- Faster picture startup when a console is turned on with USB left connected.
 - Recovery on its own when the HDMI source changes mode, for example a Wii
   loader launching a game.
 - Updates to the app, the driver and the OBS source, signed and checked,
@@ -203,9 +204,10 @@ source are clients that read from it, so pausing or closing one never
 interrupts the other. Whichever client starts first launches the service, and
 it exits about 20 seconds after the last client leaves.
 
-The service restarts capture on its own when the signal is lost, when the
-console changes mode, and when the USB stream stops arriving while the card
-still reports a valid mode. Each build carries a number, and a client that
+The service keeps the card initialized while waiting for a console to turn on
+and when reacquiring HDMI after signal loss or a mode change. Brief incomplete
+HDMI timing readings during startup are retried without resetting USB. A USB
+failure or a stalled stream still triggers full recovery. Each build carries a number, and a client that
 finds an older service running replaces it with the newest one installed.
 
 More detail: [shared capture](docs/shared-capture.md),

@@ -20,7 +20,17 @@ implementation; they do not imply support for other hardware revisions.
 - C6 value 0 index 0100 disarms events. C2 value 0 configures stream pool;
   C7 value 0064 configures I2C. EC initialization packet and MCU/GPIO handshake
   follow the reference sequence. All commands are volatile, not flash writes.
+- While waiting for HDMI: read timing every 20 ms. Incomplete or unsupported
+  timing stays in the wait state; persistent invalid timing gets a status hint.
+  Failed control reads and HDCP remain errors.
 - Start: disarm, enable stream, wait 105 ms, select alternate 4, queue reads.
+  Until a complete frame arrives, recheck timing every 50 ms to catch temporary
+  boot modes; once live, restore the normal 2 s interval.
+- Confirmed signal loss or a mode change: stop/drain the stream, discard parser
+  and media timing state, and reacquire HDMI on the same initialized USB session.
+  Warm reuse requires successful stream shutdown and no outstanding callbacks;
+  otherwise fall back to full USB recovery. Only complete delivered frames count
+  as evidence against a false no-signal timing read.
 - Stop: select alternate 0 before canceling reads, drain callbacks, wait 35 ms,
   disarm and disable stream. Ordering avoids filling FX3 DMA while EP0 waits.
 - Data records have 4-byte headers: FF 00 00 XY then width*2 YUY2 bytes for

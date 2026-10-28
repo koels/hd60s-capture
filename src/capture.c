@@ -30,7 +30,7 @@ struct state {
  uint8_t header[4],audio[1020],pcm[4096],*frame;
  unsigned pcm_n;
  unsigned header_n,remaining,kind,line_n,rows,audio_n;
- uint64_t epoch,audio_epoch,delivered,frames,samples,bytes,bad,partial;
+ uint64_t epoch,audio_epoch,delivered,frames,samples,bytes,bad,partial,signal_ready;
  bool failed;
  unsigned suspect; uint64_t suspect_frames;
  hd_status last_status;
@@ -147,17 +147,19 @@ static int init_device(state *s,const atomic_bool *stop) {
  return 0;
 }
 static unsigned le16(const uint8_t *d) { return d[0]|(d[1]<<8); }
-enum { MODE_READY=0, MODE_ABSENT=1 };
+enum { MODE_READY=0, MODE_ABSENT=1, MODE_UNSTABLE=2 };
 static int decode_mode(state *s,hd_mode *m,const uint8_t b[32]) {
  unsigned w=le16(b+10),h=le16(b+8),ht=le16(b+6),vt=le16(b+4);
  if(!w && !h) return 1;
  if(w<320 || w>1920 || h<200 || h>1080 || w%2 || ht<w || vt<h || b[12]<20 || b[12]>130) {
-  logmsg(s,"Invalid/unsupported timing: %ux%u @ %u, totals %ux%u",w,h,b[12],ht,vt); return -1;
+  /* The MCU updates these fields separately while HDMI locks. An incomplete
+   * snapshot is not a failed USB session and must not trigger reinitialization. */
+  return MODE_UNSTABLE;
  }
  /* Revision 4 reports active lines per FIELD and field rate (upstream
   * hd60s-core.c). Publish bob-deinterlaced progressive frames at that rate. */
  bool interlaced=(b[13]&1) || h==240 || h==288 || h==540;
- if(interlaced && h>540) { logmsg(s,"Unsupported interlaced field height: %u",h);return -1; }
+ if(interlaced && h>540) return MODE_UNSTABLE;
  s->detected_interlaced=interlaced;
  if(interlaced) h*=2;
  if(b[13]&8) { logmsg(s,"HDCP-protected input cannot be captured"); return -1; }
@@ -194,7 +196,10 @@ static void parse(state *s,const uint8_t *data,size_t count) {
    bool blank=(h[3]&0x20)!=0;
    if(blank && !s->blank && s->frame_started) {
     if(s->rows==s->mode.height/(s->interlaced?2:1)) {
-     if(!s->frames) status_event(s,HD_LIVE,"Receiving video and audio");
+     if(!s->delivered) {
+      if(s->signal_ready) logmsg(s,"HDMI mode ready -> first complete frame: %.1f ms",(now_ns()-s->signal_ready)/1e6);
+      status_event(s,HD_LIVE,"Receiving video and audio");
+     }
      if(s->cb.scan) s->cb.scan(s->cb.context,s->interlaced?2:1);
      if(s->cb.video) s->cb.video(s->cb.context,s->frame,&s->mode,video_time(s));
      ++s->frames; ++s->delivered;
@@ -261,98 +266,8 @@ static IOReturn submit(transfer *t) {
  if(!e) ++s->pending; else logmsg(s,"Read submission failed: 0x%08x",e);
  return e;
 }
-int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
- state *s=calloc(1,sizeof *s); if(!s) return -1; s->cb=*cb;
- int rc=-1;
- if(open_device(s)) {
-  if(!hd_device_product()) status_event(s,HD_DISCONNECTED,"Plug in your HD60 S using a USB 3 cable.");
-  goto done;
- }
- status_event(s,HD_INITIALIZING,"Preparing your HD60 S…");
- if(init_device(s,stop)) {
-  status_event(s,HD_ERROR,s->product==0x0076?"Initialization failed. Retrying; reconnect the card if this continues."
-   :"This HD60 S revision did not answer the way revision 4 does, so it is probably not supported yet. Retrying.");
-  goto done;
- }
- int detected=MODE_ABSENT;
- for(unsigned i=0;!atomic_load(stop);i++) {
-  detected=detect(s,&s->mode); if(detected<=0) break;
-  if(!i) status_event(s,HD_NO_SIGNAL,"HD60 S connected. Turn on your HDMI source and check its cable.");
-  if(i%10==0) logmsg(s,"Waiting for HDMI signal");
-  usleep(200000);
- }
- s->interlaced=s->detected_interlaced;
- if(detected || atomic_load(stop)) { if(detected<0) status_event(s,HD_ERROR,"Unable to read a supported HDMI mode. Try a progressive, unprotected source."); goto done; }
- logmsg(s,"Input: %ux%u @ %u%s, audio %u Hz, %s limited range",s->mode.width,s->mode.height,s->mode.rate,s->mode.fractional?"/1.001":"",s->mode.audio_rate,s->mode.bt709?"BT.709":"BT.601");
- if(s->interlaced) logmsg(s,"Interlaced input: bob deinterlacing each field to %ux%u progressive",s->mode.width,s->mode.height);
- s->frame=malloc((size_t)s->mode.width*s->mode.height*2); if(!s->frame) goto done;
- for(unsigned i=0;i<RING;i++) { s->ring[i].s=s; if(posix_memalign((void **)&s->ring[i].data,CHUNK,CHUNK)) goto done; }
- if((*s->usb)->CreateInterfaceAsyncEventSource(s->usb,&s->events)) goto done;
- CFRunLoopAddSource(CFRunLoopGetCurrent(),s->events,kCFRunLoopDefaultMode);
- if(disarm(s) || write_reg(s,0x10,1)) goto done;
- s->gate=true; usleep(105000);
- IOReturn e=(*s->usb)->SetAlternateInterface(s->usb,4);
- if(e) { logmsg(s,"Bulk alternate setting failed: 0x%08x",e); goto done; }
- s->active=true;
- for(unsigned i=0;i<RING;i++) if(submit(&s->ring[i])) { s->active=false; s->failed=true; break; }
- uint64_t start=now_ns(),report=start,poll=start,interval=2000000000ULL,progress=start,seen_bytes=0,frame_progress=start,seen_frames=0;
- while(s->active && !atomic_load(stop) && (seconds<=0 || now_ns()-start<seconds*1e9)) {
-  CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.02,false);
-  uint64_t now=now_ns();
-  /* A source that renegotiates its output (a Wii loader launching a game, a
-   * console changing mode) can leave the bulk pipe wedged while the timing
-   * registers keep reporting the old mode perfectly. Nothing below notices
-   * that, so capture sits live and silent until the process is restarted.
-   * The byte counter is the one signal that always stops in that case. */
-  if(s->bytes!=seen_bytes) { seen_bytes=s->bytes;progress=now; }
-  else if(now-progress>2000000000ULL) {
-   logmsg(s,"No USB data for 2 s; restarting capture");
-   status_event(s,HD_INITIALIZING,"The HDMI source changed. Reconnecting…");
-   s->failed=true;break;
-  }
-  if(s->delivered!=seen_frames) { seen_frames=s->delivered;frame_progress=now; }
-  else if(now-frame_progress>3000000000ULL) {
-   logmsg(s,"No complete video frames for 3 s; resetting capture");s->failed=true;break;
-  }
-  if(now-report>1000000000) { logmsg(s,"Frames %llu, partial %llu, bad headers %llu, USB %.1f MB, audio samples %llu",s->frames,s->partial,s->bad,s->bytes/1e6,s->samples); report=now; }
-  if(now-poll>interval) {
-   hd_mode current={0}; int status=detect(s,&current); poll=now;
-   bool lost=status==MODE_ABSENT,bad_read=status<0;
-   bool changed=!status && (s->detected_interlaced!=s->interlaced || current.width!=s->mode.width || current.height!=s->mode.height || current.rate!=s->mode.rate || current.fractional!=s->mode.fractional || current.audio_rate!=s->mode.audio_rate || current.bt709!=s->mode.bt709);
-   /* The timing registers can read back zero or half-updated while the MCU
-    * refreshes them, even with a perfectly stable source. Acting on a single
-    * sample tears down a healthy capture, so confirm with quicker re-reads
-    * before reporting signal loss or restarting. */
-   if(lost || bad_read || changed) {
-    if(!s->suspect) s->suspect_frames=s->frames;
-    s->suspect++;
-    uint64_t delivered=s->frames-s->suspect_frames;
-    /* The bulk stream is the ground truth. A register reporting no signal while
-     * complete frames keep arriving is the register being wrong, not the source
-     * going away, so believe the frames. A changed or unreadable mode gets no
-     * such benefit: those keep delivering frames at a geometry we can no longer
-     * parse, so they still have to restart. */
-    if(lost && delivered) {
-     logmsg(s,"Ignored a no-signal timing read; %llu frames arrived while it claimed no signal",(unsigned long long)delivered);
-     s->suspect=0; interval=2000000000ULL;
-    } else if(s->suspect<3) {
-     interval=250000000ULL;
-    } else {
-     if(lost) status_event(s,HD_NO_SIGNAL,"HDMI signal lost. Check your source and HDMI cable.");
-     logmsg(s,"HDMI signal %s after %u confirmations, %llu frames delivered during them; restarting capture",
-      lost?"lost":bad_read?"unreadable":"changed",s->suspect,(unsigned long long)delivered);
-     s->failed=true; break;
-    }
-   } else {
-    if(s->suspect) { logmsg(s,"Ignored a transient HDMI timing glitch (%u sample%s)",s->suspect,s->suspect==1?"":"s"); s->suspect=0; }
-    interval=2000000000ULL;
-   }
-  }
- }
- rc=(!s->failed && s->frames>0)?0:-1;
- done:
- if(s->failed && s->last_status!=HD_NO_SIGNAL && !atomic_load(stop)) status_event(s,HD_ERROR,"Capture interrupted. Reconnecting automatically…");
- if(!atomic_load(stop) && !hd_device_product()) status_event(s,HD_DISCONNECTED,"Plug in your HD60 S using a USB 3 cable.");
+static bool stop_stream(state *s) {
+ bool clean=true;
  /* Drain the FX3 before canceling reads. Never issue control writes from callbacks. */
  s->active=false;
  if(s->usb && s->gate) {
@@ -368,9 +283,145 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
    * pipe is cleared first so those control writes are not answered with the
    * stall that wedged the stream in the first place. */
   if(end) (*s->usb)->ClearPipeStallBothEnds(s->usb,1);
-  disarm(s); write_reg(s,0x10,0);
+  IOReturn disarmed=disarm(s),disabled=write_reg(s,0x10,0);
+  clean=!end && !disarmed && !disabled && !s->pending;
  }
- if(s->events) { CFRunLoopRemoveSource(CFRunLoopGetCurrent(),s->events,kCFRunLoopDefaultMode); CFRelease(s->events); }
+ if(s->events) { CFRunLoopRemoveSource(CFRunLoopGetCurrent(),s->events,kCFRunLoopDefaultMode); CFRelease(s->events); s->events=NULL; }
+ s->gate=false;
+ return clean;
+}
+static void reset_stream(state *s) {
+ /* Called only after every asynchronous callback has drained. Keep the USB
+  * interface and initialized MCU, but discard all old parser/timing state. */
+ for(unsigned i=0;i<RING;i++) free(s->ring[i].data);
+ free(s->frame);
+ state fresh={.dev=s->dev,.usb=s->usb,.opened=s->opened,.cb=s->cb,.product=s->product};
+ *s=fresh;
+}
+int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
+ state *s=calloc(1,sizeof *s); if(!s) return -1; s->cb=*cb;
+ int rc=-1;
+ if(open_device(s)) {
+  if(!hd_device_product()) status_event(s,HD_DISCONNECTED,"Plug in your HD60 S using a USB 3 cable.");
+  goto done;
+ }
+ status_event(s,HD_INITIALIZING,"Preparing your HD60 S…");
+ if(init_device(s,stop)) {
+  status_event(s,HD_ERROR,s->product==0x0076?"Initialization failed. Retrying; reconnect the card if this continues."
+   :"This HD60 S revision did not answer the way revision 4 does, so it is probably not supported yet. Retrying.");
+  goto done;
+ }
+ wait_signal:;
+ bool warm_restart=false;
+ int detected=MODE_ABSENT;
+ uint64_t unstable_since=0;
+ bool unsupported_reported=false;
+ for(unsigned i=0;!atomic_load(stop);i++) {
+  detected=detect(s,&s->mode); if(detected<=0) break;
+  if(!i) status_event(s,HD_NO_SIGNAL,"HD60 S connected. Waiting for a stable HDMI signal.");
+  if(detected==MODE_UNSTABLE) {
+   if(!unstable_since) {
+    unstable_since=now_ns();
+    logmsg(s,"HDMI timing is settling; keeping the initialized card open");
+   }
+   if(!unsupported_reported && now_ns()-unstable_since>2000000000ULL) {
+    status_event(s,HD_NO_SIGNAL,"Waiting for stable, supported HDMI timing. Check the console output mode.");
+    unsupported_reported=true;
+   }
+  } else { unstable_since=0;unsupported_reported=false; }
+  if(i%100==0) logmsg(s,"Waiting for HDMI signal");
+  usleep(20000);
+ }
+ s->interlaced=s->detected_interlaced;
+ if(detected || atomic_load(stop)) { if(detected<0) status_event(s,HD_ERROR,"Unable to read a supported HDMI mode. Try a progressive, unprotected source."); goto done; }
+ s->signal_ready=now_ns();
+ logmsg(s,"Input: %ux%u @ %u%s, audio %u Hz, %s limited range",s->mode.width,s->mode.height,s->mode.rate,s->mode.fractional?"/1.001":"",s->mode.audio_rate,s->mode.bt709?"BT.709":"BT.601");
+ if(s->interlaced) logmsg(s,"Interlaced input: bob deinterlacing each field to %ux%u progressive",s->mode.width,s->mode.height);
+ s->frame=malloc((size_t)s->mode.width*s->mode.height*2); if(!s->frame) goto done;
+ for(unsigned i=0;i<RING;i++) { s->ring[i].s=s; if(posix_memalign((void **)&s->ring[i].data,CHUNK,CHUNK)) goto done; }
+ if((*s->usb)->CreateInterfaceAsyncEventSource(s->usb,&s->events)) goto done;
+ CFRunLoopAddSource(CFRunLoopGetCurrent(),s->events,kCFRunLoopDefaultMode);
+ if(disarm(s) || write_reg(s,0x10,1)) goto done;
+ s->gate=true; usleep(105000);
+ IOReturn e=(*s->usb)->SetAlternateInterface(s->usb,4);
+ if(e) { logmsg(s,"Bulk alternate setting failed: 0x%08x",e); goto done; }
+ s->active=true;
+ for(unsigned i=0;i<RING;i++) if(submit(&s->ring[i])) { s->active=false; s->failed=true; break; }
+ uint64_t start=now_ns(),report=start,poll=start,interval=50000000ULL,progress=start,seen_bytes=0,frame_progress=start,seen_frames=0;
+ while(s->active && !atomic_load(stop) && (seconds<=0 || now_ns()-start<seconds*1e9)) {
+  CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.02,false);
+  uint64_t now=now_ns();
+  /* A source that renegotiates its output (a Wii loader launching a game, a
+   * console changing mode) can leave the bulk pipe wedged while the timing
+   * registers keep reporting the old mode perfectly. Nothing below notices
+   * that, so capture sits live and silent until the process is restarted.
+   * The byte counter is the one signal that always stops in that case. */
+  if(s->bytes!=seen_bytes) { seen_bytes=s->bytes;progress=now; }
+  else if(now-progress>2000000000ULL) {
+   hd_mode current={0};
+   if(detect(s,&current)==MODE_ABSENT) {
+    status_event(s,HD_NO_SIGNAL,"HDMI signal lost. Waiting for your console…");
+    warm_restart=true;break;
+   }
+   logmsg(s,"No USB data for 2 s; restarting capture");
+   status_event(s,HD_INITIALIZING,"The HDMI source changed. Reconnecting…");
+   s->failed=true;break;
+  }
+  if(s->delivered!=seen_frames) { seen_frames=s->delivered;frame_progress=now; }
+  else if(now-frame_progress>3000000000ULL) {
+   logmsg(s,"No complete video frames for 3 s; resetting capture");s->failed=true;break;
+  }
+  if(now-report>1000000000) { logmsg(s,"Frames %llu, partial %llu, bad headers %llu, USB %.1f MB, audio samples %llu",s->frames,s->partial,s->bad,s->bytes/1e6,s->samples); report=now; }
+  if(now-poll>interval) {
+   hd_mode current={0}; int status=detect(s,&current); poll=now;
+   bool lost=status==MODE_ABSENT,bad_read=status<0 || status==MODE_UNSTABLE;
+   bool changed=!status && (s->detected_interlaced!=s->interlaced || current.width!=s->mode.width || current.height!=s->mode.height || current.rate!=s->mode.rate || current.fractional!=s->mode.fractional || current.audio_rate!=s->mode.audio_rate || current.bt709!=s->mode.bt709);
+   /* The timing registers can read back zero or half-updated while the MCU
+    * refreshes them, even with a perfectly stable source. Acting on a single
+    * sample tears down a healthy capture, so confirm with quicker re-reads
+    * before reporting signal loss or restarting. */
+   if(lost || bad_read || changed) {
+    if(!s->suspect) s->suspect_frames=s->delivered;
+    s->suspect++;
+    uint64_t delivered=s->delivered-s->suspect_frames;
+    /* The bulk stream is the ground truth. A register reporting no signal while
+     * complete frames keep arriving is the register being wrong, not the source
+     * going away, so believe the frames. A changed or unreadable mode gets no
+     * such benefit: those keep delivering frames at a geometry we can no longer
+     * parse, so they still have to restart. */
+    if(lost && delivered) {
+     logmsg(s,"Ignored a no-signal timing read; %llu frames arrived while it claimed no signal",(unsigned long long)delivered);
+     s->suspect=0; interval=2000000000ULL;
+    } else if(s->suspect<3) {
+     interval=s->delivered?250000000ULL:50000000ULL;
+    } else {
+     if(lost) status_event(s,HD_NO_SIGNAL,"HDMI signal lost. Check your source and HDMI cable.");
+     logmsg(s,"HDMI signal %s after %u confirmations, %llu frames delivered during them; restarting capture",
+      lost?"lost":bad_read?"unreadable":"changed",s->suspect,(unsigned long long)delivered);
+     if(lost || changed || status==MODE_UNSTABLE) warm_restart=true; else s->failed=true;
+     break;
+    }
+   } else {
+    if(s->suspect) { logmsg(s,"Ignored a transient HDMI timing glitch (%u sample%s)",s->suspect,s->suspect==1?"":"s"); s->suspect=0; }
+    interval=s->delivered?2000000000ULL:50000000ULL;
+   }
+  }
+ }
+ if(warm_restart && !atomic_load(stop)) {
+  bool clean=stop_stream(s);
+  if(clean && !s->pending) {
+   logmsg(s,"HDMI reacquiring; keeping the card initialized for console power-on");
+   reset_stream(s);
+   goto wait_signal;
+  }
+  /* Never reuse buffers still owned by a USB callback. */
+  s->failed=true;
+ }
+ rc=(!s->failed && s->frames>0)?0:-1;
+ done:
+ if(s->failed && s->last_status!=HD_NO_SIGNAL && !atomic_load(stop)) status_event(s,HD_ERROR,"Capture interrupted. Reconnecting automatically…");
+ if(!atomic_load(stop) && !hd_device_product()) status_event(s,HD_DISCONNECTED,"Plug in your HD60 S using a USB 3 cable.");
+ stop_stream(s);
  if(s->usb) { (*s->usb)->USBInterfaceClose(s->usb); (*s->usb)->Release(s->usb); }
  /* A wedged FX3 may survive interface close/reopen. Reset this device on
   * failed streams before the service retries the full initialization sequence. */

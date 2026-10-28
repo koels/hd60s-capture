@@ -80,6 +80,14 @@ int main(void) {
  assert(decode_mode(&s,&decoded,timing)==MODE_READY && decoded.height==480 && decoded.fractional);
  timing[8]=32;timing[9]=1;timing[12]=50;timing[13]=1;
  assert(decode_mode(&s,&decoded,timing)==MODE_READY && decoded.height==576 && decoded.rate==50);
+ /* Power-on hardware trace: partially updated 720x146 @95 timing must
+  * keep waiting on the initialized card, rather than fail/reinitialize USB. */
+ timing[8]=146;timing[9]=0;timing[12]=95;
+ assert(decode_mode(&s,&decoded,timing)==MODE_UNSTABLE);
+ timing[8]=240;timing[12]=60;timing[13]=1;
+ assert(decode_mode(&s,&decoded,timing)==MODE_READY && decoded.height==480);
+ timing[13]=9;
+ assert(decode_mode(&s,&decoded,timing)<0); /* HDCP is still rejected. */
  memset(timing,0,sizeof timing);
  assert(decode_mode(&s,&decoded,timing)==MODE_ABSENT);
  /* A loss of two seconds must not poison all subsequent client timestamps. */
@@ -87,5 +95,18 @@ int main(void) {
  assert(paced_time(&epoch,100000000ULL,3100000000ULL)==3070000000ULL);
  assert(paced_time(&epoch,110000000ULL,3110000000ULL)==3080000000ULL);
  assert(paced_time(&epoch,120000000ULL,3090000000ULL)==3090000000ULL);
+ /* A warm restart must discard partial records and old frame pacing while
+  * preserving the initialized USB session and callbacks. ASan checks ownership. */
+ state warm={.opened=true,.product=0x0076,.cb={.video=got_video},
+  .remaining=128,.header_n=3,.pcm_n=100,.frames=60,.delivered=59,
+  .epoch=123,.audio_epoch=456,.failed=true,.interlaced=true,.suspect=2};
+ warm.frame=malloc(16);
+ for(unsigned i=0;i<RING;i++) warm.ring[i].data=malloc(8);
+ reset_stream(&warm);
+ assert(warm.opened && warm.product==0x0076 && warm.cb.video==got_video);
+ assert(!warm.frame && !warm.remaining && !warm.header_n && !warm.pcm_n);
+ assert(!warm.frames && !warm.delivered && !warm.epoch && !warm.audio_epoch);
+ assert(!warm.failed && !warm.interlaced && !warm.suspect);
+ for(unsigned i=0;i<RING;i++) assert(!warm.ring[i].data && !warm.ring[i].ready);
  puts("Parser passed: progressive and interlaced fields at every USB chunk size, bob output, mode decoding, audio batching, incomplete-frame rejection");
 }
