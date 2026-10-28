@@ -63,8 +63,9 @@ app and OBS say so plainly, and nothing is sent to the card beyond the setup
 commands revision 4 takes.
 
 Inputs: progressive video up to 1920 × 1080. 1080p at 59.94 fps has been confirmed working; 720p is expected to work.
-Interlaced formats remain untested/unknown and are currently rejected by the
-driver. HDCP-protected sources are not captured.
+Interlaced signals do not work and are unsupported. Select progressive output
+(480p, 720p or 1080p) on the HDMI source. Capture waits for a supported signal
+and resumes automatically when progressive output returns. HDCP-protected sources are not captured.
 
 Needs macOS 13 or later on Apple silicon, and a USB 3 port.
 
@@ -252,7 +253,7 @@ Also confirmed: 1920 × 1080 progressive at 59.94 fps with 48 kHz stereo.
 the incoming video aspect ratio without cropping.
 
 Not yet tested or not implemented: revisions 1 to 3,
-interlaced input, analog audio, more than one card, long-run audio and video
+analog audio, more than one card, long-run audio and video
 drift, and calibrated color accuracy.
 
 ## Credits and license

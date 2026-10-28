@@ -147,19 +147,23 @@ static int init_device(state *s,const atomic_bool *stop) {
  return 0;
 }
 static unsigned le16(const uint8_t *d) { return d[0]|(d[1]<<8); }
-static int detect(state *s,hd_mode *m) {
- uint8_t b[32]={0};
- if(control(s,true,0xc0,0x64,0,b,32)) return -1;
+enum { MODE_READY=0, MODE_ABSENT=1, MODE_INTERLACED=2 };
+static int decode_mode(state *s,hd_mode *m,const uint8_t b[32]) {
  unsigned w=le16(b+10),h=le16(b+8),ht=le16(b+6),vt=le16(b+4);
  if(!w && !h) return 1;
  if(w<320 || w>1920 || h<200 || h>1080 || w%2 || ht<w || vt<h || b[12]<20 || b[12]>130) {
   logmsg(s,"Invalid/unsupported timing: %ux%u @ %u, totals %ux%u",w,h,b[12],ht,vt); return -1;
  }
- if((b[13]&1) || h==240 || h==288 || h==540) { logmsg(s,"Interlaced input is not implemented yet; use 720p or 1080p"); return -1; }
+ if((b[13]&1) || h==240 || h==288 || h==540) return MODE_INTERLACED;
  if(b[13]&8) { logmsg(s,"HDCP-protected input cannot be captured"); return -1; }
  *m=(hd_mode){.width=w,.height=h,.rate=b[12],.fractional=!!(b[13]&2),.audio_rate=b[14]*1000,.bt709=((b[13]>>4)&3)!=2};
  if(m->audio_rate!=32000 && m->audio_rate!=44100 && m->audio_rate!=48000 && m->audio_rate!=96000 && m->audio_rate!=192000) m->audio_rate=0;
  return 0;
+}
+static int detect(state *s,hd_mode *m) {
+ uint8_t b[32]={0};
+ if(control(s,true,0xc0,0x64,0,b,32)) return -1;
+ return decode_mode(s,m,b);
 }
 /* Rebase after lost USB data instead of letting nominal clocks fall permanently
  * behind. Keep normal packet jitter out of the clock, and never move backwards. */
@@ -260,11 +264,21 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
    :"This HD60 S revision did not answer the way revision 4 does, so it is probably not supported yet. Retrying.");
   goto done;
  }
- int detected=1;
+ int detected=MODE_ABSENT,previous=-1;
  for(unsigned i=0;!atomic_load(stop);i++) {
   detected=detect(s,&s->mode); if(detected<=0) break;
-  if(!i) status_event(s,HD_NO_SIGNAL,"HD60 S connected. Turn on your HDMI source and check its cable.");
-  if(i%10==0) logmsg(s,"Waiting for HDMI signal"); usleep(200000);
+  /* Unsupported input is a waiting state, not a failed initialization. Keep
+   * polling the receiver so a switch back to progressive can start capture
+   * without repeatedly rebooting the MCU while the source renegotiates. */
+  if(detected!=previous) {
+   if(detected==MODE_INTERLACED) {
+    logmsg(s,"Interlaced input unsupported; waiting for progressive HDMI");
+    status_event(s,HD_ERROR,"Interlaced input is unsupported. Select 480p, 720p or 1080p on your source; capture resumes automatically.");
+   } else status_event(s,HD_NO_SIGNAL,"HD60 S connected. Turn on your HDMI source and check its cable.");
+   previous=detected;
+  }
+  if(i%10==0 && detected==MODE_ABSENT) logmsg(s,"Waiting for HDMI signal");
+  usleep(200000);
  }
  if(detected || atomic_load(stop)) { if(detected<0) status_event(s,HD_ERROR,"Unable to read a supported HDMI mode. Try a progressive, unprotected source."); goto done; }
  logmsg(s,"Input: %ux%u @ %u%s, audio %u Hz, %s limited range",s->mode.width,s->mode.height,s->mode.rate,s->mode.fractional?"/1.001":"",s->mode.audio_rate,s->mode.bt709?"BT.709":"BT.601");
@@ -300,7 +314,7 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
   if(now-report>1000000000) { logmsg(s,"Frames %llu, partial %llu, bad headers %llu, USB %.1f MB, audio samples %llu",s->frames,s->partial,s->bad,s->bytes/1e6,s->samples); report=now; }
   if(now-poll>interval) {
    hd_mode current={0}; int status=detect(s,&current); poll=now;
-   bool lost=status==1,bad_read=status<0;
+   bool lost=status==MODE_ABSENT,bad_read=status<0 || status==MODE_INTERLACED;
    bool changed=!status && (current.width!=s->mode.width || current.height!=s->mode.height || current.rate!=s->mode.rate || current.fractional!=s->mode.fractional || current.audio_rate!=s->mode.audio_rate || current.bt709!=s->mode.bt709);
    /* The timing registers can read back zero or half-updated while the MCU
     * refreshes them, even with a perfectly stable source. Acting on a single

@@ -35,6 +35,19 @@ int main(void) {
  s.mode=(hd_mode){.width=4,.height=3,.rate=60,.audio_rate=48000};
  unsigned before=emitted; parse(&s,stream,sizeof stream);
  assert(emitted==before && s.partial==1);
+ /* An interlaced receiver must not expose a capture mode, and progressive
+  * timing after it must be accepted without reinitializing the device. */
+ uint8_t timing[32]={0};hd_mode decoded={0};
+ timing[10]=128;timing[11]=7; /* 1920 */
+ timing[8]=56;timing[9]=4; /* 1080 */
+ timing[6]=152;timing[7]=8; /* total 2200 */
+ timing[4]=101;timing[5]=4; /* total 1125 */
+ timing[12]=60;timing[13]=1;timing[14]=48;
+ assert(decode_mode(&s,&decoded,timing)==MODE_INTERLACED && !decoded.width);
+ timing[13]=2;
+ assert(decode_mode(&s,&decoded,timing)==MODE_READY && decoded.width==1920 && decoded.height==1080);
+ memset(timing,0,sizeof timing);
+ assert(decode_mode(&s,&decoded,timing)==MODE_ABSENT);
  /* A loss of two seconds must not poison all subsequent client timestamps. */
  uint64_t epoch=1000000000ULL;
  assert(paced_time(&epoch,100000000ULL,3100000000ULL)==3070000000ULL);
