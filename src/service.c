@@ -44,7 +44,6 @@ static void *capture(void *unused) {
  while(!atomic_load(&core_stop)) {
   int product=hd_device_product();
   if(!product)status(NULL,HD_DISCONNECTED,"");
-  else if(product!=0x76)status(NULL,HD_ERROR,"");
   else hd_capture(&cb,&core_stop,0);
   for(unsigned i=0;i<20 && !atomic_load(&core_stop);i++)usleep(100000);
  }

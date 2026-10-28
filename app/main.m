@@ -97,6 +97,12 @@
 static NSTextField *label(NSString *text,CGFloat size,NSFontWeight weight,NSColor *color) {
  NSTextField *v=[NSTextField labelWithString:text]; v.font=[NSFont systemFontOfSize:size weight:weight];v.textColor=color;v.lineBreakMode=NSLineBreakByWordWrapping;return v;
 }
+/* The header's line about the card. Revision 4 is what this was built and
+ * tested on; the older ones are tried, and say so. */
+static NSString *cardLine(void) {
+ int product=hd_device_product();
+ return product>0 && product!=0x76?[NSString stringWithFormat:@"Older revision %04x over USB 3, untested",product]:@"Revision 4 over USB 3";
+}
 /* One fact in a soft container. Returns the field; its superview is the chip. */
 static NSTextField *chip(NSString *text) {
  NSTextField *value=label(text,11,NSFontWeightMedium,[NSColor colorWithWhite:1 alpha:.82]);
@@ -179,7 +185,7 @@ static void captureVideo(void *ctx,const uint8_t *bytes,const hd_mode *mode,uint
     app.picture.contents=(__bridge id)rendered;app.placeholder.hidden=YES;app.statusKey=nil;
     app.badge.stringValue=@"Live";app.badge.textColor=NSColor.whiteColor;app.badgeDot.layer.backgroundColor=NSColor.systemGreenColor.CGColor;
     app.sizeChip.stringValue=size;app.rateChip.stringValue=rate;app.audioChip.stringValue=sound;app.chips.hidden=NO;
-    app.statusHint=@"Revision 4 over USB 3";app.lastFrame=[NSDate date];
+    app.statusHint=cardLine();app.lastFrame=[NSDate date];
    }
    CGImageRelease(rendered);atomic_store(&app->framePending,false);
   });
@@ -227,7 +233,7 @@ static void *captureWorker(void *ctx) {
  mark.imageScaling=NSImageScaleProportionallyUpOrDown;
  [mark.widthAnchor constraintEqualToConstant:32].active=YES;[mark.heightAnchor constraintEqualToConstant:32].active=YES;
  NSTextField *heading=label(@"HD60 S Capture",16,NSFontWeightSemibold,NSColor.whiteColor);
- self.mode=label(@"Revision 4 over USB 3",11,NSFontWeightRegular,NSColor.secondaryLabelColor);
+ self.mode=label(cardLine(),11,NSFontWeightRegular,NSColor.secondaryLabelColor);
  self.mode.font=[NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
  NSStackView *titles=[NSStackView stackViewWithViews:@[heading,self.mode]];
  titles.orientation=NSUserInterfaceLayoutOrientationVertical;titles.alignment=NSLayoutAttributeLeading;titles.spacing=2;
@@ -429,7 +435,7 @@ static void *captureWorker(void *ctx) {
 - (void)refreshCaptureSummary {
  if(!self.settingsWindow.isVisible || !self.captureSummary) return;
  int product=hd_device_product();
- NSString *card=product==0x76?@"HD60 S revision 4, connected":product>0?[NSString stringWithFormat:@"An unsupported Elgato card is attached (product %04x)",product]:@"No HD60 S found on USB";
+ NSString *card=product==0x76?@"HD60 S revision 4, connected":product>0?[NSString stringWithFormat:@"HD60 S older revision (product %04x), connected. Untested: it may not work",product]:@"No HD60 S found on USB";
  NSString *signal=self.chips.hidden?[NSString stringWithFormat:@"Signal: %@",self.badge.stringValue.lowercaseString]
   :[NSString stringWithFormat:@"Signal: %@ at %@, %@",self.sizeChip.stringValue,self.rateChip.stringValue,self.audioChip.stringValue];
  self.captureSummary.stringValue=[NSString stringWithFormat:@"%@\n%@",card,signal];
@@ -636,7 +642,7 @@ static NSTextField *settingsNote(NSString *text) {
 }
 - (void)updateModeLine {
  BOOL noteLives=self.note && self.noteUntil && self.noteUntil.timeIntervalSinceNow>0;
- self.mode.stringValue=noteLives?self.note:(self.statusHint?:@"Revision 4 over USB 3");
+ self.mode.stringValue=noteLives?self.note:(self.statusHint?:cardLine());
  self.mode.textColor=noteLives&&self.noteIsError?NSColor.systemRedColor:NSColor.secondaryLabelColor;
 }
 - (void)tick:(NSTimer *)timer {
@@ -699,7 +705,7 @@ static NSTextField *settingsNote(NSString *text) {
  NSColor *tint=value==HD_DISCONNECTED?NSColor.secondaryLabelColor:value==HD_ERROR?NSColor.systemRedColor:NSColor.systemOrangeColor;
  self.badgeDot.layer.backgroundColor=tint.CGColor;self.badge.textColor=value==HD_DISCONNECTED?NSColor.secondaryLabelColor:NSColor.whiteColor;
  self.chips.hidden=YES;
- self.statusHint=value==HD_NO_SIGNAL?@"Connected, waiting for an HDMI source":@"Revision 4 over USB 3";
+ self.statusHint=value==HD_NO_SIGNAL?@"Connected, waiting for an HDMI source":cardLine();
  [self updateModeLine];
  pthread_mutex_lock(&audioLock);audioCount=0;audioRead=audioWrite=0;pthread_mutex_unlock(&audioLock);
 }

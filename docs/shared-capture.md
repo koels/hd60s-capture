@@ -2,7 +2,7 @@
 
 ## What works
 
-HD60 S Capture and the **HD60 S Native (Revision 4)** OBS source can receive the
+HD60 S Capture and the **HD60 S Native** OBS source can receive the
 same card simultaneously. Each receives raw YUY2 video and stereo PCM with the
 same capture timestamps. Their display settings and gain are independent.
 Pausing or closing one consumer does not stop another consumer's capture.
@@ -84,8 +84,7 @@ signatures; public distribution/notarization remains separate.
 - Audible playback confirmation is separate from these data/API checks.
 
 Multi-consumer 1080p60 throughput, long-term clock drift and every external audio
-output device are not established by the 480p test. The shared service does not
-broaden support beyond revision 4.
+output device are not established by the 480p test. The shared service treats every revision the same; only revision 4 has been tested.
 
 ## Full screen and flicker correction (0.4.1)
 

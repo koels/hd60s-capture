@@ -1,7 +1,10 @@
 # HD60 S Native for macOS
 
-Native Apple silicon USB capture and an OBS 33 source plugin for **HD60 S
-revision 4 (`0fd9:0076`)**. Video and HDMI audio come from one USB stream.
+Native Apple silicon USB capture and an OBS 33 source plugin for the **Elgato
+HD60 S**. Built and tested on revision 4 (`0fd9:0076`); revisions 1 to 3
+(`0fd9:004f`, `0fd9:005e`, `0fd9:0074`) are tried with the same protocol but
+nobody has tested one yet. If you have one, an issue saying whether it works
+either way is the most useful thing you can send. Video and HDMI audio come from one USB stream.
 No source from adam8113/hd60s-arm64 is used.
 
 **Made with AI.** The app, the USB driver, the OBS source and this README were
@@ -52,7 +55,7 @@ all when OBS is absent. See [Updating](#updating) for the OBS restart. Build tha
 
 To install by hand instead, use `make install`. In OBS:
 
-1. Sources → Add → **HD60 S Native (Revision 4)**.
+1. Sources → Add → **HD60 S Native**.
 2. Add one source for the card. Initialization and capture start automatically.
 3. Video and audio are included together; no additional audio capture source is
    needed for this card.
@@ -129,7 +132,10 @@ when the app offers it, then restart OBS.
 
 The shared service owns USB once for all current app/OBS consumers. Close shared
 consumers before using the older direct-USB command-line capture tool. The
-service retries lost signals and device connections automatically. The current core waits for an HDMI signal until stopped. Only revision 4 is supported.
+service retries lost signals and device connections automatically. The current core waits for an HDMI signal until stopped. Revision 4 is the only
+one tested. An older card is opened and initialised the same way; if it does not
+answer like revision 4, the app and OBS say so instead of a generic error, and
+nothing is written to the card beyond the same setup commands revision 4 takes.
 
 ## OBS status screens and Discord Devices
 
@@ -164,7 +170,7 @@ itself expose the embedded HDMI audio as a microphone.
 
 ## Source properties
 
-Double-click **HD60 S Native (Revision 4)** in Sources to open Properties.
+Double-click **HD60 S Native** in Sources to open Properties.
 Changes apply live without restarting the USB stream:
 
 - **Output resolution:** match input, 640×480, 720×480, 1280×720, 1920×1080.
@@ -276,7 +282,7 @@ The initial parser scan discards data before the first valid record; startup
 bad-header counts are expected. Counts should stop increasing after alignment.
 Current capture uses asynchronous bulk transfers, with 32 queued 32 KiB reads.
 Only progressive inputs up to 1920×1080 are accepted. Higher modes, interlaced
-capture, revisions 1–3, analog audio selection, multiple cards, long-term A/V
+capture, revisions 1–3 (attempted, untested), analog audio selection, multiple cards, long-term A/V
 clock drift correction, and calibrated color accuracy are not implemented or
 validated. 720p/1080p throughput and reconnect behavior still need hardware tests;
 they are not established by the 480p test. HDCP-protected sources are rejected.

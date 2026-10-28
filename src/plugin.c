@@ -10,7 +10,7 @@
 #include "processing.h"
 #include "status-frame.h"
 OBS_DECLARE_MODULE()
-MODULE_EXPORT const char *obs_module_description(void) { return "Native HD60 S revision-4 video and audio capture"; }
+MODULE_EXPORT const char *obs_module_description(void) { return "Native HD60 S video and audio capture"; }
 typedef struct { unsigned width,height,fps; int matrix,range,format; double gain; bool mute,limiter,release_hidden; } settings;
 struct source {
  obs_source_t *source; pthread_t thread; pthread_mutex_t lock; atomic_bool stop; bool started;
@@ -26,7 +26,7 @@ struct source {
  uint8_t *status_pixels;
 
 };
-static const char *name(void *unused) { (void)unused; return "HD60 S Native (Revision 4)"; }
+static const char *name(void *unused) { (void)unused; return "HD60 S Native"; }
 static void message(void *ctx,const char *text) { (void)ctx; blog(LOG_INFO,"[HD60 S Native] %s",text); }
 static settings snapshot(struct source *s) { pthread_mutex_lock(&s->lock); settings c=s->config; pthread_mutex_unlock(&s->lock); return c; }
 static const char *status_name(hd_status v) {

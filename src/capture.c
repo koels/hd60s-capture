@@ -34,6 +34,7 @@ struct state {
  bool failed;
  unsigned suspect; uint64_t suspect_frames;
  hd_status last_status;
+ int product;
 };
 static uint64_t now_ns(void) { mach_timebase_info_data_t t; mach_timebase_info(&t); return (uint64_t)((long double)mach_absolute_time()*t.numer/t.denom); }
 static void logmsg(state *s,const char *fmt,...) {
@@ -64,7 +65,12 @@ static int open_device(state *s) {
   if(v && CFGetTypeID(v)==CFNumberGetTypeID()) CFNumberGetValue(v,kCFNumberIntType,&vid);
   if(p && CFGetTypeID(p)==CFNumberGetTypeID()) CFNumberGetValue(p,kCFNumberIntType,&pid);
   if(v) CFRelease(v); if(p) CFRelease(p);
-  if(vid!=0x0fd9 || pid!=0x0076) { IOObjectRelease(service); continue; }
+  /* Built and tested on revision 4 (0x0076). Revisions 1 to 3 are tried with
+   * the same protocol in case they share it; nobody has confirmed that, so a
+   * failure on one of them is reported as that rather than as a fault. */
+  if(vid!=0x0fd9 || (pid!=0x0076 && pid!=0x0074 && pid!=0x005e && pid!=0x004f)) { IOObjectRelease(service); continue; }
+  if(pid!=0x0076) logmsg(s,"HD60 S %04x is an untested revision; trying the revision-4 protocol",pid);
+  s->product=pid;
   IOCFPlugInInterface **plugin=NULL; SInt32 score=0;
   e=IOCreatePlugInInterfaceForService(service,kIOUSBDeviceUserClientTypeID,kIOCFPlugInInterfaceID,&plugin,&score);
   IOObjectRelease(service);
@@ -105,7 +111,7 @@ static int open_device(state *s) {
   }
   break;
  }
- IOObjectRelease(it); logmsg(s,"No accessible revision-4 HD60 S"); return -1;
+ IOObjectRelease(it); logmsg(s,"No accessible HD60 S"); return -1;
 }
 static int init_device(state *s,const atomic_bool *stop) {
  usleep(600000);
@@ -240,7 +246,11 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
   goto done;
  }
  status_event(s,HD_INITIALIZING,"Preparing your HD60 S…");
- if(init_device(s,stop)) { status_event(s,HD_ERROR,"Initialization failed. Retrying; reconnect the card if this continues."); goto done; }
+ if(init_device(s,stop)) {
+  status_event(s,HD_ERROR,s->product==0x0076?"Initialization failed. Retrying; reconnect the card if this continues."
+   :"This HD60 S revision did not answer the way revision 4 does, so it is probably not supported yet. Retrying.");
+  goto done;
+ }
  int detected=1;
  for(unsigned i=0;!atomic_load(stop);i++) {
   detected=detect(s,&s->mode); if(detected<=0) break;

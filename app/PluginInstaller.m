@@ -64,5 +64,5 @@ void HDSyncOBSPlugin(NSWindow *parent,BOOL announceNoop) {
  // the copied file is only the thin client, which OBS reads at its next start.
  if(announceNoop) report(parent,already?@"OBS source updated":@"OBS source installed",
   runningOBS().count?@"OBS keeps capturing through the updated driver. The source file itself is picked up the next time OBS starts."
-   :@"Open OBS, then choose Sources, Add, HD60 S Native (Revision 4).",NO);
+   :@"Open OBS, then choose Sources, Add, HD60 S Native.",NO);
 }
