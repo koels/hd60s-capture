@@ -979,6 +979,11 @@ static NSString *elapsedText(NSTimeInterval seconds) {
  if(![self.updater startUpdater:&error]) { fprintf(stderr,"[HD60 S updater] %s\n",error.localizedDescription.UTF8String);[NSApp terminate:nil];return; }
  self.updater.automaticallyDownloadsUpdates=YES;
  [self.updater checkForUpdatesInBackground];
+ // Nothing can be shown from here, so anything that waits on a person would
+ // wait forever. Give the cycle a generous bound and leave.
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(300*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+  fprintf(stderr,"[HD60 S updater] gave up after 5 minutes\n");exit(0);
+ });
 }
 - (BOOL)updater:(SPUUpdater *)updater willInstallUpdateOnQuit:(SUAppcastItem *)item immediateInstallationBlock:(void (^)(void))install {
  (void)updater;fprintf(stderr,"[HD60 S updater] installing %s\n",item.versionString.UTF8String);

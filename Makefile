@@ -94,7 +94,11 @@ app: service build/AppIcon.icns app/PluginInstaller.m app/PluginInstaller.h src/
 	codesign --force --sign - "$(APP)/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
 	codesign --force --sign - "$(APP)/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app"
 	codesign --force --sign - "$(APP)/Contents/Frameworks/Sparkle.framework"
-	codesign --force --sign - "$(APP)"
+	@# Ad-hoc signing names an app by the hash of its bytes, so to Sparkle every
+	@# build is a stranger and updates are refused. Naming it by bundle ID keeps
+	@# builds recognisable to each other; the EdDSA signature on each release is
+	@# what actually proves an update came from us.
+	codesign --force --sign - -r='designated => identifier "local.hd60s.capture"' "$(APP)"
 
 .PHONY: bundle
 bundle: plugin app
