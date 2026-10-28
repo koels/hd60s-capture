@@ -4,6 +4,13 @@ Native Apple silicon USB capture and an OBS 33 source plugin for **HD60 S
 revision 4 (`0fd9:0076`)**. Video and HDMI audio come from one USB stream.
 No source from adam8113/hd60s-arm64 is used.
 
+**Made with AI.** The app, the USB driver, the OBS source and this README were
+written with an AI coding assistant (Claude), directed and tested by a person on
+real hardware: an HD60 S revision 4 capturing a Wii, through this app and OBS 33.
+The protocol comes from Doug Brown's GPL-2.0 Linux driver, credited in
+`src/capture.c`. Read the code before trusting it with anything that matters, and
+expect the rough edges that come with a driver that has had one tester.
+
 ## Native app with sound and shared capture (version 0.4)
 
 Open `/Applications/HD60 S Capture.app`, or build with `make app`. Preview and
