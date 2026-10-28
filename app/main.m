@@ -987,7 +987,11 @@ static NSString *elapsedText(NSTimeInterval seconds) {
 }
 - (BOOL)updater:(SPUUpdater *)updater willInstallUpdateOnQuit:(SUAppcastItem *)item immediateInstallationBlock:(void (^)(void))install {
  (void)updater;fprintf(stderr,"[HD60 S updater] installing %s\n",item.versionString.UTF8String);
- self.installing=YES;install();return YES;
+ self.installing=YES;install();
+ // Sparkle's installer replaces the bundle once this process has gone, and
+ // nothing here would otherwise make it go.
+ dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)),dispatch_get_main_queue(),^{ exit(0); });
+ return YES;
 }
 // Nothing to relaunch: the OBS source picks up the new service by itself.
 - (BOOL)updaterShouldRelaunchApplication:(SPUUpdater *)updater { (void)updater;return NO; }

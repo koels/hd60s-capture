@@ -27,18 +27,23 @@ static int run_launchctl(char *const arguments[]) {
  if(error)return -1;int status=0;while(waitpid(pid,&status,0)<0)if(errno!=EINTR)return -1;
  return WIFEXITED(status)&&WEXITSTATUS(status)==0?0:-1;
 }
-/* The build of the bundle whose Contents/MacOS is dir: 0.4.7 is 407, as in the Makefile. */
+/* The build of the bundle whose Contents/MacOS is dir: 0.4.7 is 407, as in the
+ * Makefile. Read from the file every time rather than through CFBundle, which
+ * caches a bundle's Info.plist for the life of the process: OBS runs for hours,
+ * and would go on seeing the version the app had when OBS started. */
 static unsigned bundle_build(const char *dir) {
- char path[PATH_MAX];snprintf(path,sizeof path,"%s/../..",dir);
- CFURLRef url=CFURLCreateFromFileSystemRepresentation(NULL,(const UInt8 *)path,(CFIndex)strlen(path),true);
- if(!url)return 0;
- CFBundleRef bundle=CFBundleCreate(NULL,url);CFRelease(url);
- if(!bundle)return 0;
+ char path[PATH_MAX];snprintf(path,sizeof path,"%s/../Info.plist",dir);
+ int fd=open(path,O_RDONLY);if(fd<0)return 0;
+ char bytes[16384];ssize_t got=read(fd,bytes,sizeof bytes);close(fd);
+ if(got<=0)return 0;
+ CFDataRef data=CFDataCreate(NULL,(const UInt8 *)bytes,got);if(!data)return 0;
+ CFPropertyListRef plist=CFPropertyListCreateWithData(NULL,data,kCFPropertyListImmutable,NULL,NULL);CFRelease(data);
+ if(!plist)return 0;
  unsigned build=0,major=0,minor=0,patch=0;char text[32];
- CFTypeRef version=CFBundleGetValueForInfoDictionaryKey(bundle,kCFBundleVersionKey);
+ CFTypeRef version=CFGetTypeID(plist)==CFDictionaryGetTypeID()?CFDictionaryGetValue(plist,CFSTR("CFBundleVersion")):NULL;
  if(version && CFGetTypeID(version)==CFStringGetTypeID() && CFStringGetCString(version,text,sizeof text,kCFStringEncodingUTF8)
     && sscanf(text,"%u.%u.%u",&major,&minor,&patch)==3) build=major*10000+minor*100+patch;
- CFRelease(bundle);return build;
+ CFRelease(plist);return build;
 }
 static void consider(const char *dir,char *best,size_t capacity,unsigned *best_build) {
  char path[PATH_MAX];snprintf(path,sizeof path,"%s/hd60s-service",dir);
