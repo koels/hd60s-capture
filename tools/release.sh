@@ -19,8 +19,14 @@ feed=$(cat packaging/appcast-url 2>/dev/null || true)
 [ -s packaging/appcast-key.pub ] || { echo "packaging/appcast-key.pub is empty; run .deps/sparkle/bin/generate_keys --account hd60s-capture" >&2; exit 1; }
 gh release view "$tag" >/dev/null 2>&1 && { echo "$tag is already released; bump VERSION first" >&2; exit 1; }
 
+# Refuse a different app's Keychain key before building or publishing.
+public_key=$(.deps/sparkle/bin/generate_keys --account hd60s-capture -p)
+[ "$public_key" = "$(cat packaging/appcast-key.pub)" ] || { echo "Sparkle signing key does not match this app" >&2; exit 1; }
+
 make bundle
 make test
+make test-shared
+codesign --verify --deep --strict "build/HD60 S Capture.app"
 
 out=build/releases/$version
 rm -rf "$out"
@@ -32,5 +38,6 @@ ditto -c -k --sequesterRsrc --keepParent "build/HD60 S Capture.app" "$zip"
 .deps/sparkle/bin/generate_appcast --account hd60s-capture \
  --download-url-prefix "${feed%/latest/download/appcast.xml}/download/$tag/" "$out"
 
-gh release create "$tag" "$zip" "$out/appcast.xml" --title "HD60 S Capture $version" --notes "Version $version."
+if [ -z "${RELEASE_NOTES:-}" ]; then printf 'Version %s.\n' "$version" > build/release-notes.md; fi
+gh release create "$tag" "$zip" "$out/appcast.xml" --title "HD60 S Capture $version" --notes-file "${RELEASE_NOTES:-build/release-notes.md}"
 echo "Released $tag; the feed now serves it."

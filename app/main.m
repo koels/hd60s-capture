@@ -35,6 +35,7 @@
  uint64_t recordEpoch; BOOL recordSessionStarted;
  hd_mode recordMode,liveMode; BOOL haveLiveMode;
 }
+- (void)fitWindowToInput;
 @property NSWindow *window;
 @property NSView *preview;
 @property CALayer *picture;
@@ -181,7 +182,9 @@ static void captureVideo(void *ctx,const uint8_t *bytes,const hd_mode *mode,uint
   uint64_t generation=atomic_load(&app->session);
   dispatch_async(dispatch_get_main_queue(),^{
    if(!app.closing && generation==atomic_load(&app->session) && !atomic_load(&app->stop)) {
+    BOOL geometryChanged=!app->haveLiveMode || app->liveMode.width!=current.width || app->liveMode.height!=current.height;
     app->liveMode=current;app->haveLiveMode=YES;
+    if(geometryChanged) [app fitWindowToInput];
     app.picture.contents=(__bridge id)rendered;app.placeholder.hidden=YES;app.statusKey=nil;
     app.badge.stringValue=@"Live";app.badge.textColor=NSColor.whiteColor;app.badgeDot.layer.backgroundColor=NSColor.systemGreenColor.CGColor;
     app.sizeChip.stringValue=size;app.rateChip.stringValue=rate;app.audioChip.stringValue=sound;app.chips.hidden=NO;
@@ -373,6 +376,8 @@ static void *captureWorker(void *ctx) {
  NSMenu *appMenu=[[NSMenu alloc] init];
  NSMenuItem *updates=[[NSMenuItem alloc] initWithTitle:@"Check for Updates\u2026" action:@selector(checkForUpdates:) keyEquivalent:@""];
  updates.target=self;[appMenu addItem:updates];
+ NSMenuItem *settings=[[NSMenuItem alloc] initWithTitle:@"Settings…" action:@selector(showSettings:) keyEquivalent:@","];settings.target=self;[appMenu insertItem:settings atIndex:0];
+ [appMenu insertItem:[NSMenuItem separatorItem] atIndex:1];
  [appMenu addItem:[NSMenuItem separatorItem]];
  [appMenu addItemWithTitle:@"Quit HD60 S Capture" action:@selector(terminate:) keyEquivalent:@"q"];appItem.submenu=appMenu;
  NSMenuItem *viewItem=[NSMenuItem new];[menu addItem:viewItem];
@@ -384,7 +389,7 @@ static void *captureWorker(void *ctx) {
  NSMenuItem *record=[[NSMenuItem alloc] initWithTitle:@"Start Recording" action:@selector(toggleRecording:) keyEquivalent:@"r"];record.target=self;[viewMenu addItem:record];
  NSMenuItem *reveal=[[NSMenuItem alloc] initWithTitle:@"Show Recordings" action:@selector(showRecordings:) keyEquivalent:@"R"];reveal.target=self;[viewMenu addItem:reveal];
  [viewMenu addItem:[NSMenuItem separatorItem]];
- NSMenuItem *prefs=[[NSMenuItem alloc] initWithTitle:@"Capture Settings" action:@selector(showSettings:) keyEquivalent:@","];prefs.target=self;[viewMenu addItem:prefs];
+ NSMenuItem *prefs=[[NSMenuItem alloc] initWithTitle:@"Capture Settings" action:@selector(showSettings:) keyEquivalent:@""];prefs.target=self;[viewMenu addItem:prefs];
  NSApp.mainMenu=menu;
 }
 
@@ -735,6 +740,30 @@ static NSTextField *settingsNote(NSString *text) {
  }
 }
 - (void)toggleFullScreen:(id)sender { (void)sender;[self.window toggleFullScreen:nil]; }
+// Preview insets are 36 horizontally and 114 vertically, including the header.
+- (NSSize)windowWillResize:(NSWindow *)window toSize:(NSSize)size {
+ if(haveLiveMode && ![self isFullScreen]) {
+  CGFloat overhead=window.frame.size.height-self.preview.bounds.size.height;
+  size.height=(size.width-36)*liveMode.height/liveMode.width+overhead;
+ }
+ return size;
+}
+- (void)fitWindowToInput {
+ if(!haveLiveMode || [self isFullScreen]) return;
+ [self.window.contentView layoutSubtreeIfNeeded];
+ NSRect frame=self.window.frame;
+ NSSize size=[self windowWillResize:self.window toSize:frame.size];
+ NSRect visible=self.window.screen.visibleFrame;
+ if(size.height>visible.size.height) {
+  CGFloat overhead=frame.size.height-self.preview.bounds.size.height;
+  size.height=visible.size.height;
+  size.width=(size.height-overhead)*liveMode.width/liveMode.height+36;
+ }
+ frame.origin.y+=frame.size.height-size.height;frame.size=size;
+ [self.window setFrame:frame display:YES];
+ [self.window.contentView layoutSubtreeIfNeeded];
+ self.picture.frame=self.preview.bounds;
+}
 - (void)windowDidEnterFullScreen:(NSNotification *)notification {
  (void)notification;
  self.header.hidden=YES;
@@ -748,6 +777,7 @@ static NSTextField *settingsNote(NSString *text) {
  self.header.hidden=NO;
  [NSLayoutConstraint deactivateConstraints:self.fullScreenLayout];[NSLayoutConstraint activateConstraints:self.windowedLayout];
  self.preview.layer.cornerRadius=12;self.preview.layer.borderWidth=1;
+ [self fitWindowToInput];
  setSymbol(self.fullScreenButton,@"arrow.up.left.and.arrow.down.right",@"Full screen");
  [self showOverlay];
 }

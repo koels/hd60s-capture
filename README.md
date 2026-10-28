@@ -62,8 +62,9 @@ the most useful thing you can send. If it does not answer like revision 4, the
 app and OBS say so plainly, and nothing is sent to the card beyond the setup
 commands revision 4 takes.
 
-Inputs: progressive video up to 1920 × 1080. Interlaced modes and HDCP-protected
-sources are not captured.
+Inputs: progressive video up to 1920 × 1080. 1080p at 59.94 fps has been confirmed working; 720p is expected to work.
+Interlaced formats remain untested/unknown and are currently rejected by the
+driver. HDCP-protected sources are not captured.
 
 Needs macOS 13 or later on Apple silicon, and a USB 3 port.
 
@@ -90,7 +91,7 @@ The control bar over the picture has three groups: record and its timer; pause,
 sound on or off and the input level; settings and full screen. Double-click the
 picture for full screen, and press Escape to leave it.
 
-Settings (the slider icon in the bar, or **Command-comma**) has four sections:
+Settings (in the app menu, the slider icon in the bar, or **Command-comma**) has four sections:
 
 | | |
 |---|---|
@@ -246,7 +247,11 @@ Tested on an HD60 S revision 4 capturing a Wii at 720 × 480, 59.94 fps, with
 - Parser, audio processing, status screen and shared-memory tests, run with
   AddressSanitizer and UndefinedBehaviorSanitizer (`make test`, `make test-shared`).
 
-Not yet tested or not implemented: 720p and 1080p throughput, revisions 1 to 3,
+Also confirmed: 1920 × 1080 progressive at 59.94 fps with 48 kHz stereo.
+720p is assumed working, pending a separate hardware test. The window follows
+the incoming video aspect ratio without cropping.
+
+Not yet tested or not implemented: revisions 1 to 3,
 interlaced input, analog audio, more than one card, long-run audio and video
 drift, and calibrated color accuracy.
 

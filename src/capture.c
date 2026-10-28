@@ -14,8 +14,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdarg.h>
-#define RING 32
-#define CHUNK 32768
+#define RING 64
+#define CHUNK 131072
 
 typedef struct state state;
 typedef struct { state *s; uint8_t *data; UInt32 size; IOReturn result; bool ready; } transfer;
@@ -30,7 +30,7 @@ struct state {
  uint8_t header[4],audio[1020],pcm[4096],*frame;
  unsigned pcm_n;
  unsigned header_n,remaining,kind,line_n,rows,audio_n;
- uint64_t epoch,frames,samples,bytes,bad,partial;
+ uint64_t epoch,audio_epoch,delivered,frames,samples,bytes,bad,partial;
  bool failed;
  unsigned suspect; uint64_t suspect_frames;
  hd_status last_status;
@@ -161,7 +161,16 @@ static int detect(state *s,hd_mode *m) {
  if(m->audio_rate!=32000 && m->audio_rate!=44100 && m->audio_rate!=48000 && m->audio_rate!=96000 && m->audio_rate!=192000) m->audio_rate=0;
  return 0;
 }
-static uint64_t video_time(state *s) { return s->epoch+(uint64_t)((long double)s->frames*1000000000*(s->mode.fractional?1001:1000)/(s->mode.rate*1000)); }
+/* Rebase after lost USB data instead of letting nominal clocks fall permanently
+ * behind. Keep normal packet jitter out of the clock, and never move backwards. */
+static uint64_t paced_time(uint64_t *epoch,uint64_t offset,uint64_t now) {
+ uint64_t pts=*epoch+offset;
+ if(now>pts && now-pts>100000000ULL) { *epoch+=now-pts-30000000ULL;pts=*epoch+offset; }
+ return pts;
+}
+static uint64_t video_time(state *s) {
+ return paced_time(&s->epoch,(uint64_t)((long double)s->frames*1000000000*(s->mode.fractional?1001:1000)/(s->mode.rate*1000)),now_ns());
+}
 static void parse(state *s,const uint8_t *data,size_t count) {
  s->bytes+=count;
  while(count) {
@@ -178,12 +187,12 @@ static void parse(state *s,const uint8_t *data,size_t count) {
     if(s->rows==s->mode.height) {
      if(!s->frames) status_event(s,HD_LIVE,"Receiving video and audio");
      if(s->cb.video) s->cb.video(s->cb.context,s->frame,&s->mode,video_time(s));
-     ++s->frames;
+     ++s->frames; ++s->delivered;
     } else { ++s->partial; ++s->frames; }
     s->frame_started=false;
    }
    if(!blank && s->blank) {
-    if(!s->epoch) s->epoch=now_ns();
+    if(!s->epoch) s->audio_epoch=s->epoch=now_ns();
     s->frame_started=true; s->rows=0;
    }
    s->blank=blank; s->line_n=0;
@@ -208,7 +217,7 @@ static void parse(state *s,const uint8_t *data,size_t count) {
      if(n>target-s->pcm_n) n=target-s->pcm_n;
      memcpy(s->pcm+s->pcm_n,s->audio+offset,n); s->pcm_n+=n; offset+=n;
      if(s->pcm_n==target) {
-      uint64_t pts=s->epoch+(uint64_t)((long double)s->samples*1000000000/s->mode.audio_rate);
+      uint64_t pts=paced_time(&s->audio_epoch,(uint64_t)((long double)s->samples*1000000000/s->mode.audio_rate),now_ns());
       if(s->cb.audio) s->cb.audio(s->cb.context,s->pcm,s->pcm_n,s->mode.audio_rate,pts);
       s->samples+=s->pcm_n/4; s->pcm_n=0;
      }
@@ -269,7 +278,7 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
  if(e) { logmsg(s,"Bulk alternate setting failed: 0x%08x",e); goto done; }
  s->active=true;
  for(unsigned i=0;i<RING;i++) if(submit(&s->ring[i])) { s->active=false; s->failed=true; break; }
- uint64_t start=now_ns(),report=start,poll=start,interval=2000000000ULL,progress=start,seen_bytes=0;
+ uint64_t start=now_ns(),report=start,poll=start,interval=2000000000ULL,progress=start,seen_bytes=0,frame_progress=start,seen_frames=0;
  while(s->active && !atomic_load(stop) && (seconds<=0 || now_ns()-start<seconds*1e9)) {
   CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.02,false);
   uint64_t now=now_ns();
@@ -283,6 +292,10 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
    logmsg(s,"No USB data for 2 s; restarting capture");
    status_event(s,HD_INITIALIZING,"The HDMI source changed. Reconnecting…");
    s->failed=true;break;
+  }
+  if(s->delivered!=seen_frames) { seen_frames=s->delivered;frame_progress=now; }
+  else if(now-frame_progress>3000000000ULL) {
+   logmsg(s,"No complete video frames for 3 s; resetting capture");s->failed=true;break;
   }
   if(now-report>1000000000) { logmsg(s,"Frames %llu, partial %llu, bad headers %llu, USB %.1f MB, audio samples %llu",s->frames,s->partial,s->bad,s->bytes/1e6,s->samples); report=now; }
   if(now-poll>interval) {
@@ -342,6 +355,12 @@ int hd_capture(const hd_callbacks *cb,const atomic_bool *stop,double seconds) {
  }
  if(s->events) { CFRunLoopRemoveSource(CFRunLoopGetCurrent(),s->events,kCFRunLoopDefaultMode); CFRelease(s->events); }
  if(s->usb) { (*s->usb)->USBInterfaceClose(s->usb); (*s->usb)->Release(s->usb); }
+ /* A wedged FX3 may survive interface close/reopen. Reset this device on
+  * failed streams before the service retries the full initialization sequence. */
+ if(s->dev && s->opened && s->failed && !atomic_load(stop)) {
+  IOReturn reset=(*s->dev)->ResetDevice(s->dev);
+  logmsg(s,"Recovery USB reset: 0x%08x",reset);
+ }
  if(s->dev) { if(s->opened) (*s->dev)->USBDeviceClose(s->dev); (*s->dev)->Release(s->dev); }
  logmsg(s,"Capture ended: %llu frames, %llu partial, %llu bad headers",s->frames,s->partial,s->bad);
  /* Closing the interface cancels outstanding reads; avoid releasing callback storage if delivery did not drain. */

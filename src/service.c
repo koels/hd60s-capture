@@ -40,7 +40,7 @@ static void message(void *ctx,const char *text) {
  (void)ctx;if(!strncmp(text,"Frames ",7))return;fprintf(stderr,"[HD60 S service] %s\n",text);
 }
 static void *capture(void *unused) {
- (void)unused;hd_callbacks cb={.video=video,.audio=audio,.message=message,.status=status};
+ (void)unused;pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE,0);hd_callbacks cb={.video=video,.audio=audio,.message=message,.status=status};
  while(!atomic_load(&core_stop)) {
   int product=hd_device_product();
   if(!product)status(NULL,HD_DISCONNECTED,"");

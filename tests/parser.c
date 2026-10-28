@@ -35,5 +35,10 @@ int main(void) {
  s.mode=(hd_mode){.width=4,.height=3,.rate=60,.audio_rate=48000};
  unsigned before=emitted; parse(&s,stream,sizeof stream);
  assert(emitted==before && s.partial==1);
+ /* A loss of two seconds must not poison all subsequent client timestamps. */
+ uint64_t epoch=1000000000ULL;
+ assert(paced_time(&epoch,100000000ULL,3100000000ULL)==3070000000ULL);
+ assert(paced_time(&epoch,110000000ULL,3110000000ULL)==3080000000ULL);
+ assert(paced_time(&epoch,120000000ULL,3090000000ULL)==3090000000ULL);
  puts("Parser passed: every USB chunk size, audio batching, incomplete-frame rejection");
 }

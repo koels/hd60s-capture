@@ -248,8 +248,8 @@ int hd_shared_capture(const hd_callbacks *cb,const atomic_bool *stop,double seco
   }
   uint64_t latest=atomic_load_explicit(&map->audio_serial,memory_order_acquire);
   if(status!=HD_LIVE)audio_next=latest+1;
-  if(latest>=audio_next && latest-audio_next>=HD_SHARED_AUDIO) {
-   if(cb->message)cb->message(cb->context,"Shared audio consumer fell behind; skipping stale samples.");audio_next=latest-HD_SHARED_AUDIO+1;
+  if(latest>=audio_next && latest-audio_next>=15) {
+   if(cb->message)cb->message(cb->context,"Shared audio consumer fell behind; skipping stale samples.");audio_next=latest-14;
   }
   while(audio_next<=latest) {
    hd_shared_pcm *block=&map->audio[audio_next%HD_SHARED_AUDIO];uint8_t pcm[HD_SHARED_PCM];
