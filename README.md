@@ -75,26 +75,29 @@ card. Downgrading on purpose works: when nothing is serving, a lower build
 lowers the floor to itself.
 
 Released builds update themselves with [Sparkle](https://sparkle-project.org)
-2.10.1, fetched into `.deps/` by `tools/fetch-deps.sh` and embedded in the app.
-**Check for Updates** is in the app menu, and the app also checks once a day.
-Two settings turn it on, both read by the Makefile and baked into the app's
-`Info.plist`:
+2.10.1 from this repository's
+[GitHub Releases](https://github.com/koels/hd60s-capture/releases). The feed is
+`releases/latest/download/appcast.xml`; each release is signed with an EdDSA
+key whose private half lives only in the maintainer's login Keychain (account
+`hd60s-capture`) and whose public half is `packaging/appcast-key.pub`.
 
-- `packaging/appcast-url`: the `https://` URL the appcast XML will be served
-  from. Sparkle refuses plain HTTP.
-- `packaging/appcast-key.pub`: the public half of an EdDSA key pair, made once
-  by `.deps/sparkle/bin/generate_keys`. The private half goes into your login
-  Keychain and never onto disk; lose it and existing installs cannot verify a
-  new release.
+The app checks once a day while open, and **Check for Updates** is in the app
+menu. It also updates when it is never opened: when OBS starts, and every six
+hours while it runs, the OBS source launches the installed app with
+`--background-update`, which checks the same feed with the same key, installs
+silently and exits without a window. The source then replaces its own file
+with the one the new app ships, and hands the card to the new driver.
 
-`tools/release.sh` then builds the app, zips it with `ditto` so the signature
-and the framework symlinks survive, signs it and writes `appcast.xml` next to
-it in `build/releases/`. Upload both to that URL.
+The app is ad-hoc signed, with its designated requirement set to its bundle ID
+so one build accepts the next. That is what lets Sparkle update it without a
+paid certificate; the EdDSA signature is what proves a release is genuine.
+Gatekeeper still blocks an ad-hoc app downloaded in a browser on another Mac,
+so distributing to others needs a Developer ID and notarization.
 
-Without those two files the app builds and runs exactly as before: the updater
-is never started, and **Check for Updates** says the build came from source and
-has no feed rather than failing quietly. That is the normal state of a working
-copy.
+To publish: bump `VERSION`, commit, run `tools/release.sh`, which builds,
+tests, signs and creates the GitHub release. `tools/check-versions.sh` then
+confirms the installed app, both copies of the source, and the running driver
+all agree.
 
 Whichever way the app updates, OBS is never closed. The driver is the service,
 not the OBS source: every client starts the newest `hd60s-service` installed
