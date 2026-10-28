@@ -228,5 +228,7 @@ bool obs_module_load(void) {
   .output_flags=OBS_SOURCE_ASYNC_VIDEO|OBS_SOURCE_AUDIO,.get_name=name,.create=create,.destroy=destroy,
   .get_defaults=defaults,.get_properties=properties,.update=update,.video_tick=tick,
   .show=source_show,.hide=source_hide};
- obs_register_source(&info); return true;
+ obs_register_source(&info);
+ hd_shared_update_in_background();
+ return true;
 }

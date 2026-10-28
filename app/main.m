@@ -955,8 +955,54 @@ static NSString *elapsedText(NSTimeInterval seconds) {
 }
 @end
 
+/* Run by the OBS source when OBS starts, so the app updates even if nobody
+ * opens it: no window, no Dock icon, one silent update cycle, then exit. The
+ * update is checked against the same signed feed and key as the app's own
+ * Check for Updates, so this adds no new way in. */
+@interface HDBackgroundUpdater : NSObject <NSApplicationDelegate,SPUUpdaterDelegate>
+@property SPUUpdater *updater;
+@property BOOL installing;
+@end
+@implementation HDBackgroundUpdater
+- (void)applicationDidFinishLaunching:(NSNotification *)notification {
+ (void)notification;
+ NSBundle *bundle=NSBundle.mainBundle;
+ id feed=bundle.infoDictionary[@"SUFeedURL"];
+ // The window, if open, already runs its own updater; two at once would race.
+ BOOL appOpen=NO;
+ for(NSRunningApplication *other in [NSRunningApplication runningApplicationsWithBundleIdentifier:bundle.bundleIdentifier])
+  if(other.processIdentifier!=getpid() && other.activationPolicy==NSApplicationActivationPolicyRegular) appOpen=YES;
+ if(appOpen || ![feed isKindOfClass:NSString.class] || ![feed length]) { [NSApp terminate:nil];return; }
+ SPUStandardUserDriver *driver=[[SPUStandardUserDriver alloc] initWithHostBundle:bundle delegate:nil];
+ self.updater=[[SPUUpdater alloc] initWithHostBundle:bundle applicationBundle:bundle userDriver:driver delegate:self];
+ NSError *error=nil;
+ if(![self.updater startUpdater:&error]) { fprintf(stderr,"[HD60 S updater] %s\n",error.localizedDescription.UTF8String);[NSApp terminate:nil];return; }
+ self.updater.automaticallyDownloadsUpdates=YES;
+ [self.updater checkForUpdatesInBackground];
+}
+- (BOOL)updater:(SPUUpdater *)updater willInstallUpdateOnQuit:(SUAppcastItem *)item immediateInstallationBlock:(void (^)(void))install {
+ (void)updater;fprintf(stderr,"[HD60 S updater] installing %s\n",item.versionString.UTF8String);
+ self.installing=YES;install();return YES;
+}
+// Nothing to relaunch: the OBS source picks up the new service by itself.
+- (BOOL)updaterShouldRelaunchApplication:(SPUUpdater *)updater { (void)updater;return NO; }
+- (void)updater:(SPUUpdater *)updater didFinishUpdateCycleForUpdateCheck:(SPUUpdateCheck)check error:(NSError *)error {
+ (void)updater;(void)check;
+ if(error) fprintf(stderr,"[HD60 S updater] %s\n",error.localizedDescription.UTF8String);
+ if(!self.installing) [NSApp terminate:nil];
+}
+- (void)updater:(SPUUpdater *)updater didAbortWithError:(NSError *)error {
+ (void)updater;fprintf(stderr,"[HD60 S updater] aborted: %s\n",error.localizedDescription.UTF8String);[NSApp terminate:nil];
+}
+@end
+
 int main(int argc,const char *argv[]) {
- (void)argc;(void)argv;
- @autoreleasepool { NSApplication *app=[NSApplication sharedApplication];app.activationPolicy=NSApplicationActivationPolicyRegular;CaptureApp *delegate=[CaptureApp new];app.delegate=delegate;[app run]; }
+ @autoreleasepool {
+  NSApplication *app=[NSApplication sharedApplication];
+  BOOL background=argc>1 && !strcmp(argv[1],"--background-update");
+  app.activationPolicy=background?NSApplicationActivationPolicyProhibited:NSApplicationActivationPolicyRegular;
+  id delegate=background?[HDBackgroundUpdater new]:[CaptureApp new];
+  app.delegate=delegate;[app run];
+ }
  return 0;
 }

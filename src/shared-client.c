@@ -13,6 +13,8 @@
 #include <CoreServices/CoreServices.h>
 #include <copyfile.h>
 #include <signal.h>
+#include <pthread.h>
+#include <removefile.h>
 extern char **environ;
 static void report(const hd_callbacks *cb,unsigned status) { if(cb->status)cb->status(cb->context,status,hd_shared_status_text(status)); }
 static int run_launchctl(char *const arguments[]) {
@@ -125,31 +127,39 @@ static int serving_pid(const char *root) {
  munmap(map,sizeof *map);
  return pid>0?pid:0;
 }
+/* The newest service build this client can start. That, not the client's own
+ * build, is the bar: OBS keeps an old client loaded for its whole session, and
+ * it still has to make way when an update installs a newer driver beside it. */
+static unsigned target_build(void) {
+ char ignored[PATH_MAX];unsigned newest=newest_service(ignored,sizeof ignored);
+ return newest?newest:HD_SHARED_BUILD;
+}
 static bool retire_older_service(const hd_callbacks *cb,const char *root) {
  int pid=serving_pid(root);
  if(pid<=0 || pid==getpid() || kill(pid,0)) return false;
- unsigned build=0;int identified=0;
+ unsigned target=target_build(),build=0;int identified=0;
  bool known=!hd_service_identity_read(root,&build,&identified) && identified==pid;
- if(known && build>=HD_SHARED_BUILD) return false;
+ if(known && build>=target) return false;
  if(cb->message) {
   char text[200],which[64];
   if(known) snprintf(which,sizeof which,"build %u",build);
   else snprintf(which,sizeof which,"a build too old to name itself");
-  snprintf(text,sizeof text,"The shared service is %s and this one is %u; taking the card over.",which,(unsigned)HD_SHARED_BUILD);
+  snprintf(text,sizeof text,"The shared service is %s and build %u is installed; handing the card over.",which,target);
   cb->message(cb->context,text);
  }
- // Raise the floor first, so the old client restarting its old service loses.
- hd_min_build_write(root,HD_SHARED_BUILD);
+ // Raise the floor first, so an old client restarting its old service loses.
+ hd_min_build_write(root,target);
  if(kill(pid,SIGTERM)) return false;
  for(int i=0;i<100 && !kill(pid,0);i++) usleep(50000);
  return kill(pid,0)!=0;
 }
-/* A deliberate downgrade: this build is below the floor and nothing is serving,
- * so the floor is a leftover from a version that is no longer installed. */
+/* A deliberate downgrade: the floor is above anything installed and nothing is
+ * serving, so it is a leftover from a version that has been removed. */
 static void reclaim_floor_if_alone(const char *root) {
- if(hd_min_build_read(root)<=HD_SHARED_BUILD) return;
+ unsigned target=target_build();
+ if(hd_min_build_read(root)<=target) return;
  if(serving_pid(root)>0) return;
- hd_min_build_write(root,HD_SHARED_BUILD);
+ hd_min_build_write(root,target);
 }
 static hd_shared_map *attach(const char *root,int *slot,int *pid_out) {
  char path[220];snprintf(path,sizeof path,"%s/stream-v1",root);int fd=open(path,O_RDWR|O_NOFOLLOW);if(fd<0)return NULL;
@@ -171,7 +181,7 @@ int hd_shared_capture(const hd_callbacks *cb,const atomic_bool *stop,double seco
  if(!getenv("HD60S_TEST_NAMESPACE")) { reclaim_floor_if_alone(root);retire_older_service(cb,root); }
  uint8_t *pixels=malloc(HD_SHARED_FRAME);if(!pixels)return -1;
  hd_shared_map *map=NULL;int slot=-1,service_pid=0;unsigned old_status=UINT_MAX;uint64_t video_token=0,audio_next=0,spawn_time=0,start=hd_shared_now(),frames=0;
- uint64_t stale=0,stale_report=0,worst_age=0;
+ uint64_t stale=0,stale_report=0,worst_age=0,update_check=hd_shared_now();
  while(!atomic_load(stop) && (seconds<=0 || hd_shared_now()-start<seconds*1e9)) {
   uint64_t now=hd_shared_now();
   if(!map) {
@@ -184,6 +194,13 @@ int hd_shared_capture(const hd_callbacks *cb,const atomic_bool *stop,double seco
     usleep(50000);continue;
    }
    video_token=0;audio_next=atomic_load_explicit(&map->audio_serial,memory_order_acquire)+1;old_status=UINT_MAX;
+  }
+  // An update can land while this client stays attached for hours, as OBS
+  // does. Look for a newer installed driver now and then; handing over shows
+  // as a short gap, after which the loop reattaches to the new service.
+  if(!getenv("HD60S_TEST_NAMESPACE") && now-update_check>30000000000ULL) {
+   update_check=now;
+   if(retire_older_service(cb,root)) { int expected=getpid();atomic_compare_exchange_strong(&map->clients[slot].pid,&expected,0);munmap(map,sizeof *map);map=NULL;continue; }
   }
   hd_lease *lease=&map->clients[slot];
   if(atomic_load(&map->service_pid)!=service_pid || atomic_load(&lease->pid)!=getpid() || hd_shared_age(now,atomic_load(&map->heartbeat))>3000000000ULL) {
@@ -245,4 +262,62 @@ int hd_shared_capture(const hd_callbacks *cb,const atomic_bool *stop,double seco
  }
  if(map) {atomic_store(&map->clients[slot].reading,HD_NO_FRAME);int expected=getpid();atomic_compare_exchange_strong(&map->clients[slot].pid,&expected,0);munmap(map,sizeof *map);}
  free(pixels);return frames?0:-1;
+}
+
+/* The newest installed copy of the app, by bundle version. */
+static unsigned newest_app(char *best,size_t capacity) {
+ unsigned best_build=0;
+ CFArrayRef apps=LSCopyApplicationURLsForBundleIdentifier(CFSTR("local.hd60s.capture"),NULL);
+ if(!apps)return 0;
+ for(CFIndex i=0;i<CFArrayGetCount(apps);i++) {
+  char app[PATH_MAX],macos[PATH_MAX];
+  if(!CFURLGetFileSystemRepresentation(CFArrayGetValueAtIndex(apps,i),true,(UInt8 *)app,sizeof app))continue;
+  snprintf(macos,sizeof macos,"%s/Contents/MacOS",app);
+  unsigned build=bundle_build(macos);
+  if(build>best_build && strlen(app)<capacity) { best_build=build;strcpy(best,app); }
+ }
+ CFRelease(apps);return best_build;
+}
+static int run_and_wait(const char *program,const char *argument) {
+ char *arguments[]={(char *)program,(char *)argument,NULL};pid_t pid;
+ if(posix_spawn(&pid,program,NULL,NULL,arguments,environ))return -1;
+ int status=0;while(waitpid(pid,&status,0)<0)if(errno!=EINTR)return -1;
+ return 0;
+}
+/* Swaps this plugin's bundle for the app's newer copy. OBS keeps running the
+ * one it loaded, which stays valid after the rename; the new one is read at
+ * OBS's next start. Only a copy in the user's own plugins folder is replaced. */
+static void refresh_plugin(const char *app) {
+ Dl_info info;char self[PATH_MAX];
+ if(!dladdr((void *)hd_shared_capture,&info) || !info.dli_fname || !realpath(info.dli_fname,self))return;
+ for(int up=0;up<3;up++) { char *slash=strrchr(self,'/');if(!slash)return;*slash=0; } // .../hd60s-native.plugin
+ if(!strstr(self,"/Library/Application Support/obs-studio/plugins/"))return;
+ char source[PATH_MAX],fresh[PATH_MAX],stale[PATH_MAX];
+ snprintf(source,sizeof source,"%s/Contents/Resources/hd60s-native.plugin",app);
+ snprintf(fresh,sizeof fresh,"%s.new",self);snprintf(stale,sizeof stale,"%s.old",self);
+ char probe[PATH_MAX];snprintf(probe,sizeof probe,"%s/Contents/MacOS",source);
+ if(bundle_build(probe)<=HD_SHARED_BUILD)return;
+ removefile(fresh,NULL,REMOVEFILE_RECURSIVE);removefile(stale,NULL,REMOVEFILE_RECURSIVE);
+ if(copyfile(source,fresh,NULL,COPYFILE_ALL|COPYFILE_RECURSIVE))return;
+ if(rename(self,stale))return;
+ if(rename(fresh,self)) { rename(stale,self);return; }
+ removefile(stale,NULL,REMOVEFILE_RECURSIVE);
+}
+static void *update_thread(void *unused) {
+ (void)unused;
+ char app[PATH_MAX];
+ if(!newest_app(app,sizeof app))return NULL;
+ char updater[PATH_MAX];snprintf(updater,sizeof updater,"%s/Contents/MacOS/hd60s-app",app);
+ if(!access(updater,X_OK)) {
+  run_and_wait(updater,"--background-update");
+  // The installer finishes after the updater process has handed it the update.
+  sleep(20);
+ }
+ if(newest_app(app,sizeof app)) refresh_plugin(app);
+ return NULL;
+}
+void hd_shared_update_in_background(void) {
+ if(getenv("HD60S_TEST_NAMESPACE"))return;
+ pthread_t thread;
+ if(!pthread_create(&thread,NULL,update_thread,NULL))pthread_detach(thread);
 }
