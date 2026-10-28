@@ -310,15 +310,20 @@ static void refresh_plugin(const char *app) {
 }
 static void *update_thread(void *unused) {
  (void)unused;
- char app[PATH_MAX];
- if(!newest_app(app,sizeof app))return NULL;
- char updater[PATH_MAX];snprintf(updater,sizeof updater,"%s/Contents/MacOS/hd60s-app",app);
- if(!access(updater,X_OK)) {
-  run_and_wait(updater,"--background-update");
-  // The installer finishes after the updater process has handed it the update.
-  sleep(20);
+ // At OBS's start, then every six hours, since OBS can stay open for days.
+ for(;;) {
+  char app[PATH_MAX];
+  if(newest_app(app,sizeof app)) {
+   char updater[PATH_MAX];snprintf(updater,sizeof updater,"%s/Contents/MacOS/hd60s-app",app);
+   if(!access(updater,X_OK)) {
+    run_and_wait(updater,"--background-update");
+    // The installer finishes after the updater process has handed it the update.
+    sleep(20);
+   }
+   if(newest_app(app,sizeof app)) refresh_plugin(app);
+  }
+  sleep(6*60*60);
  }
- if(newest_app(app,sizeof app)) refresh_plugin(app);
  return NULL;
 }
 void hd_shared_update_in_background(void) {
