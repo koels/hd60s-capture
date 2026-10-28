@@ -87,8 +87,8 @@ app: service build/AppIcon.icns app/PluginInstaller.m app/PluginInstaller.h src/
 	mkdir -p "$(APP)/Contents/Frameworks"
 	rm -rf "$(APP)/Contents/Frameworks/Sparkle.framework"
 	ditto $(SPARKLE_SRC)/Sparkle.framework "$(APP)/Contents/Frameworks/Sparkle.framework"
-	# Signed inside out: a nested bundle signed after its container invalidates
-	# the container's signature, and Sparkle's installer is four levels deep.
+	@# Signed inside out: a nested bundle signed after its container invalidates
+	@# the container's signature, and Sparkle's installer is four levels deep.
 	codesign --force --sign - "$(APP)/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
 	codesign --force --sign - "$(APP)/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
 	codesign --force --sign - "$(APP)/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
