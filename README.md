@@ -24,7 +24,7 @@ Both can use the card at the same time, because one small background service
 owns the card and hands frames to each of them.
 
 <p align="center">
-  <img src="docs/images/app.png?v=2" width="800" alt="HD60 S Capture showing a Wii's HOME menu, with the input's resolution, Progressive scan label, frame rate and audio format in the top right and the control bar over the picture">
+  <img src="docs/images/app-preview-0.4.24.png" width="800" alt="HD60 S Capture showing a Wii's HOME menu, with the input's resolution, Progressive scan label, frame rate and audio format in the top right and the control bar over the picture">
 </p>
 
 > **Made with AI.** The app, the USB driver, the OBS source and this README were
@@ -107,9 +107,9 @@ Settings (in the app menu, the slider icon in the bar, or **Command-comma**) has
 | **Capture** | What the card and the signal are doing right now, and a button to update the OBS source. |
 
 <p align="center">
-  <img src="docs/images/settings-audio.png?v=2" width="420" alt="Audio settings">
-  <img src="docs/images/settings-video.png?v=2" width="420" alt="Video settings with Fit, Fill and Stretch plus Auto, 4:3 and 16:9 aspect controls">
-  <img src="docs/images/settings-capture.png?v=2" width="420" alt="Capture settings, showing the card connected and a 720 × 480 signal at 59.94 fps">
+  <img src="docs/images/audio-settings-0.4.24.png" width="420" alt="Audio settings">
+  <img src="docs/images/video-settings-0.4.24.png" width="420" alt="Video settings with Fit, Fill and Stretch plus Auto, 4:3 and 16:9 aspect controls">
+  <img src="docs/images/capture-settings-0.4.24.png" width="420" alt="Capture settings, showing the card connected and a 720 × 480 signal at 59.94 fps">
 </p>
 
 Auto aspect ratio displays 720- or 1440-sample SD inputs as 4:3. Choose 16:9
