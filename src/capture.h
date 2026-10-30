@@ -11,6 +11,12 @@ typedef enum {
 } hd_status;
 /* Returns 0 when absent, a supported/known product ID when attached, -1 on error. */
 int hd_device_product(void);
+/* Same, and fills *speed with the card's negotiated USB link speed: the
+ * IOUSBHostDevice "Device Speed" value, where 3 is SuperSpeed (USB 3) and
+ * anything lower is too slow to carry the stream. Not "USBSpeed": that reads 3
+ * on a USB 2.0 cable. -1 when unknown or absent. */
+int hd_device_find(int *speed);
+#define HD_SPEED_SUPER 3
 typedef struct {
  void (*video)(void *,const uint8_t *,const hd_mode *,uint64_t);
  void (*audio)(void *,const uint8_t *,size_t,unsigned,uint64_t);

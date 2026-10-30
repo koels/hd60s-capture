@@ -104,8 +104,18 @@ static NSTextField *label(NSString *text,CGFloat size,NSFontWeight weight,NSColo
 /* The header's line about the card. Revision 4 is what this was built and
  * tested on; the older ones are tried, and say so. */
 static NSString *cardLine(void) {
- int product=hd_device_product();
- return product>0 && product!=0x76?[NSString stringWithFormat:@"Older revision %04x over USB 3, untested",product]:@"Revision 4 over USB 3";
+ int speed=-1,product=hd_device_find(&speed);
+ /* The link is whatever the cable, hub and port negotiated, not what the card
+  * can do: a USB 2.0 path says so here instead of claiming USB 3. */
+ NSString *link=speed<0?@"USB":speed<HD_SPEED_SUPER?@"USB 2.0, too slow":@"USB 3";
+ return product>0 && product!=0x76?[NSString stringWithFormat:@"Older revision %04x over %@, untested",product,link]:[NSString stringWithFormat:@"Revision 4 over %@",link];
+}
+/* Below SuperSpeed the card enumerates and then starves, so say which part of
+ * the chain is wrong rather than connecting forever. nil when the link is fine. */
+static NSString *slowLinkDetail(void) {
+ int speed=-1;
+ if(hd_device_find(&speed)<=0 || speed<0 || speed>=HD_SPEED_SUPER) return nil;
+ return @"The card is connected at USB 2.0 speed, which cannot carry its video. Use a USB 3 cable and port: many USB-C to USB-A cables are USB 2.0 only.";
 }
 /* One fact in a soft container. Returns the field; its superview is the chip. */
 static NSTextField *chip(NSString *text) {
@@ -466,8 +476,8 @@ static void *captureWorker(void *ctx) {
 - (void)addSourceToOBS:(id)sender { (void)sender;HDSyncOBSPlugin(self.settingsWindow?:self.window,YES); }
 - (void)refreshCaptureSummary {
  if(!self.settingsWindow.isVisible || !self.captureSummary) return;
- int product=hd_device_product();
- NSString *card=product==0x76?@"HD60 S revision 4, connected":product>0?[NSString stringWithFormat:@"HD60 S older revision (product %04x), connected. Untested: it may not work",product]:@"No HD60 S found on USB";
+ int speed=-1,product=hd_device_find(&speed);
+ NSString *card=product==0x76?(speed>=0 && speed<HD_SPEED_SUPER?@"HD60 S revision 4, connected at USB 2.0 speed (too slow)":@"HD60 S revision 4, connected"):product>0?[NSString stringWithFormat:@"HD60 S older revision (product %04x), connected. Untested: it may not work",product]:@"No HD60 S found on USB";
  NSString *signal=self.chips.hidden?[NSString stringWithFormat:@"Signal: %@",self.badge.stringValue.lowercaseString]
   :[NSString stringWithFormat:@"Signal: %@ at %@, %@",self.sizeChip.stringValue,self.rateChip.stringValue,self.audioChip.stringValue];
  self.captureSummary.stringValue=[NSString stringWithFormat:@"%@\n%@",card,signal];
@@ -692,7 +702,9 @@ static NSTextField *settingsNote(NSString *text) {
    self.statusKey=nil;[self showStatus:self.shownStatus title:self.shownTitle detail:self.shownDetail];
   }
  }
+ NSString *slow=self.paused?nil:slowLinkDetail();
  if(!self.paused && hd_device_product()==0) [self displayStatus:HD_DISCONNECTED detail:@"Connect your HD60 S using a USB 3 cable. It will start automatically."];
+ else if(slow) [self displayStatus:HD_ERROR detail:slow];
  else if(self.lastFrame && -self.lastFrame.timeIntervalSinceNow>2 && self.placeholder.hidden) [self displayStatus:HD_INITIALIZING detail:@"Waiting for fresh video. Checking the HDMI signal…"];
 }
 - (void)meterTick:(NSTimer *)timer {

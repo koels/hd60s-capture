@@ -71,6 +71,15 @@ static int open_device(state *s) {
   if(vid!=0x0fd9 || (pid!=0x0076 && pid!=0x0074 && pid!=0x005e && pid!=0x004f)) { IOObjectRelease(service); continue; }
   if(pid!=0x0076) logmsg(s,"HD60 S %04x is an untested revision; trying the revision-4 protocol",pid);
   s->product=pid;
+  /* A USB 2.0 cable, hub or port negotiates high speed or slower, which cannot
+   * carry the card's stream: it initializes and then starves. Say so here
+   * instead of hanging in init. */
+  int speed=-1; hd_device_find(&speed);
+  if(speed>=0 && speed<HD_SPEED_SUPER) {
+   status_event(s,HD_ERROR,"The card is connected at USB 2.0 speed. Use a USB 3 cable and port: many USB-C to USB-A cables are USB 2.0 only.");
+   logmsg(s,"Link speed %d is below SuperSpeed; HD60 S needs USB 3",speed);
+   IOObjectRelease(service); break;
+  }
   IOCFPlugInInterface **plugin=NULL; SInt32 score=0;
   e=IOCreatePlugInInterfaceForService(service,kIOUSBDeviceUserClientTypeID,kIOCFPlugInInterfaceID,&plugin,&score);
   IOObjectRelease(service);
