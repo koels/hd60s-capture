@@ -25,3 +25,4 @@ int hd_device_find(int *speed) {
  IOObjectRelease(it);return result;
 }
 int hd_device_product(void) { return hd_device_find(NULL); }
+int hd_slow_link(void) { int speed=-1;return hd_device_find(&speed)>0 && speed>=0 && speed<HD_SPEED_SUPER; }

@@ -311,8 +311,8 @@ static void refresh_plugin(const char *app) {
 }
 static void *update_thread(void *unused) {
  (void)unused;
- // At OBS's start, then every six hours, since OBS can stay open for days.
- for(;;) {
+ // Once, at OBS's start.
+ {
   char app[PATH_MAX];
   if(newest_app(app,sizeof app)) {
    char updater[PATH_MAX];snprintf(updater,sizeof updater,"%s/Contents/MacOS/hd60s-app",app);
@@ -323,7 +323,6 @@ static void *update_thread(void *unused) {
    }
    if(newest_app(app,sizeof app)) refresh_plugin(app);
   }
-  sleep(6*60*60);
  }
  return NULL;
 }

@@ -60,10 +60,10 @@ test: build/test-display-aspect build/test-parser build/test-processing build/te
 plugin: service $(PLUGIN)/Contents/MacOS/hd60s-native
 	cp build/hd60s-service $(PLUGIN)/Contents/MacOS/
 	codesign --force --sign - $(PLUGIN)
-$(PLUGIN)/Contents/MacOS/hd60s-native: src/plugin.c src/display-aspect.h src/shared-client.c src/shared.h src/shared-internal.h src/status-frame.c src/status-frame.h src/capture.h src/processing.h packaging/Info.plist packaging/obsconfig.h VERSION
+$(PLUGIN)/Contents/MacOS/hd60s-native: src/plugin.c src/device.c src/display-aspect.h src/shared-client.c src/shared.h src/shared-internal.h src/status-frame.c src/status-frame.h src/capture.h src/processing.h packaging/Info.plist packaging/obsconfig.h VERSION
 	mkdir -p $(PLUGIN)/Contents/MacOS build/include
 	cp packaging/obsconfig.h build/include/
-	$(CC) $(CFLAGS) -fPIC -bundle src/plugin.c src/shared-client.c src/status-frame.c -I$(OBS_SRC)/libobs -I$(SIMDE_SRC) -Ibuild/include -F"$(OBS_APP)/Contents/Frameworks" -framework libobs -framework CoreGraphics -framework CoreText $(FRAMEWORKS) -Wl,-rpath,"$(OBS_APP)/Contents/Frameworks" -o $@
+	$(CC) $(CFLAGS) -fPIC -bundle src/plugin.c src/device.c src/shared-client.c src/status-frame.c -I$(OBS_SRC)/libobs -I$(SIMDE_SRC) -Ibuild/include -F"$(OBS_APP)/Contents/Frameworks" -framework libobs -framework CoreGraphics -framework CoreText $(FRAMEWORKS) -Wl,-rpath,"$(OBS_APP)/Contents/Frameworks" -o $@
 	$(call fill_version,packaging/Info.plist,$(PLUGIN)/Contents/Info.plist)
 	codesign --force --sign - $(PLUGIN)
 install: plugin

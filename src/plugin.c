@@ -64,7 +64,11 @@ static void show_status(struct source *s) {
  pthread_mutex_unlock(&s->lock);
  if(state!=HD_LIVE) {
   if(!s->status_pixels || w!=s->status_width || h!=s->status_height || state!=s->drawn_status) {
-   free(s->status_pixels);s->status_pixels=hd_status_frame(w,h,state);s->status_width=w;s->status_height=h;s->drawn_status=state;
+   /* The service publishes a status, not its wording, so a USB 2.0 link would
+    * read as a generic fault. Only the words come from IOKit here; the state
+    * stays the service's, so this cannot flip the source between states. */
+   bool slow=state==HD_ERROR && hd_slow_link();
+   free(s->status_pixels);s->status_pixels=slow?hd_status_frame_text(w,h,state,NULL,HD_SLOW_LINK_DETAIL):hd_status_frame(w,h,state);s->status_width=w;s->status_height=h;s->drawn_status=state;
   }
   if(s->status_pixels) {
    struct obs_source_frame frame={0};frame.data[0]=s->status_pixels;frame.linesize[0]=w*4;frame.width=w;frame.height=h;

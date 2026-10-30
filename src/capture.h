@@ -17,6 +17,10 @@ int hd_device_product(void);
  * on a USB 2.0 cable. -1 when unknown or absent. */
 int hd_device_find(int *speed);
 #define HD_SPEED_SUPER 3
+/* True when an HD60 S is attached below SuperSpeed. The app, the service and
+ * the OBS source all say the same thing about it, in these words. */
+int hd_slow_link(void);
+#define HD_SLOW_LINK_DETAIL "The card is connected at USB 2.0 speed, which cannot carry its video. Use a USB 3 cable and port: many USB-C to USB-A cables are USB 2.0 only."
 typedef struct {
  void (*video)(void *,const uint8_t *,const hd_mode *,uint64_t);
  void (*audio)(void *,const uint8_t *,size_t,unsigned,uint64_t);

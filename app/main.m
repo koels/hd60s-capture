@@ -19,7 +19,7 @@
 #define SETTINGS_WIDTH 470
 #define SETTINGS_INSET 24
 
-@interface CaptureApp : NSObject <NSApplicationDelegate,NSWindowDelegate> {
+@interface CaptureApp : NSObject <NSApplicationDelegate,NSWindowDelegate,SPUUpdaterDelegate> {
 @public
  atomic_bool stop,framePending,monitor,muted,limiterOn,recording;
  atomic_int gainCentiBel; // dB × 100, read on the capture thread.
@@ -112,11 +112,7 @@ static NSString *cardLine(void) {
 }
 /* Below SuperSpeed the card enumerates and then starves, so say which part of
  * the chain is wrong rather than connecting forever. nil when the link is fine. */
-static NSString *slowLinkDetail(void) {
- int speed=-1;
- if(hd_device_find(&speed)<=0 || speed<0 || speed>=HD_SPEED_SUPER) return nil;
- return @"The card is connected at USB 2.0 speed, which cannot carry its video. Use a USB 3 cable and port: many USB-C to USB-A cables are USB 2.0 only.";
-}
+static NSString *slowLinkDetail(void) { return hd_slow_link()?@HD_SLOW_LINK_DETAIL:nil; }
 /* One fact in a soft container. Returns the field; its superview is the chip. */
 static NSTextField *chip(NSString *text) {
  NSTextField *value=label(text,11,NSFontWeightMedium,[NSColor colorWithWhite:1 alpha:.82]);
@@ -371,8 +367,10 @@ static void *captureWorker(void *ctx) {
  // Started only with a feed to check. Sparkle logs an error and schedules
  // nothing without one, and a build with no feed configured is the normal
  // state of a working copy.
- self.updater=[[SPUStandardUpdaterController alloc] initWithStartingUpdater:NO updaterDelegate:nil userDriverDelegate:nil];
- if([self updateFeed].length) [self.updater startUpdater];
+ self.updater=[[SPUStandardUpdaterController alloc] initWithStartingUpdater:NO updaterDelegate:self userDriverDelegate:nil];
+ // Checked at every launch, not only on Sparkle's daily schedule: the app is
+ // opened to capture something, and that is when an old driver hurts.
+ if([self updateFeed].length) { [self.updater startUpdater];[self.updater.updater checkForUpdatesInBackground]; }
  [self buildMenu];
  [self applyFit:(int)[defaults integerForKey:@"previewFit"]];
  [self.window center];[self.window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];
@@ -603,6 +601,15 @@ static NSTextField *settingsNote(NSString *text) {
 - (NSString *)updateFeed {
  id feed=NSBundle.mainBundle.infoDictionary[@"SUFeedURL"];
  return [feed isKindOfClass:NSString.class]?feed:nil;
+}
+/* Sparkle's automatic mode downloads silently and then waits for the app to
+ * quit, which a capture window left open rarely does, so "install
+ * automatically" looked like it did nothing. Install now and relaunch, unless
+ * a recording is running; then it still waits for quit. */
+- (BOOL)updater:(SPUUpdater *)updater willInstallUpdateOnQuit:(SUAppcastItem *)item immediateInstallationBlock:(void (^)(void))install {
+ (void)updater;(void)item;
+ if(atomic_load(&recording)) return NO;
+ install();return YES;
 }
 - (void)checkForUpdates:(id)sender {
  if([self updateFeed].length) { [self.updater checkForUpdates:sender];return; }
