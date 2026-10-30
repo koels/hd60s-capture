@@ -368,8 +368,8 @@ static void *captureWorker(void *ctx) {
  // nothing without one, and a build with no feed configured is the normal
  // state of a working copy.
  self.updater=[[SPUStandardUpdaterController alloc] initWithStartingUpdater:NO updaterDelegate:self userDriverDelegate:nil];
- // Checked at every launch, not only on Sparkle's daily schedule: the app is
- // opened to capture something, and that is when an old driver hurts.
+ // Checked at every launch as well as on Sparkle's three-hour schedule: the
+ // app is opened to capture something, and that is when an old driver hurts.
  if([self updateFeed].length) { [self.updater startUpdater];[self.updater.updater checkForUpdatesInBackground]; }
  [self buildMenu];
  [self applyFit:(int)[defaults integerForKey:@"previewFit"]];

@@ -13,6 +13,6 @@
 <key>SUFeedURL</key><string>@FEED@</string>
 <key>SUPublicEDKey</key><string>@EDKEY@</string>
 <key>SUEnableAutomaticChecks</key><true/>
-<key>SUScheduledCheckInterval</key><integer>86400</integer>
+<key>SUScheduledCheckInterval</key><integer>10800</integer>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
